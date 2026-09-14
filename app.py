@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import colorsys
+import ctypes
 import json
 import sys
 import threading
@@ -91,6 +92,7 @@ class App(ctk.CTk):
         self.cfg.save()  # ensure config.json exists in app folder
         self._manual_disc: set[str] = set()
         self._ever_connected = False
+        self._boot_retries = 6  # startup grace rounds for first auto-connect
         self._dirty: set[str] = set()
         self._current_page = ""
         self._debounce: dict[str, str] = {}
@@ -690,11 +692,18 @@ class App(ctk.CTk):
 
     def _watchdog(self):
         try:
-            if (self.cfg.auto_reconnect and self._ever_connected
-                    and not self.ble.connected_addresses()
-                    and [a for a in self.cfg.last_addresses if a not in self._manual_disc]):
-                self._log("Connection lost — reconnecting ...")
-                self._auto_connect()
+            connected = self.ble.connected_addresses()
+            candidates = [a for a in self.cfg.last_addresses if a not in self._manual_disc]
+            if self.cfg.auto_connect and not connected and candidates:
+                if self._ever_connected:
+                    if self.cfg.auto_reconnect:
+                        self._log("Connection lost — reconnecting ...")
+                        self._auto_connect()
+                elif self._boot_retries > 0:
+                    # startup grace: BT stack may still be coming up
+                    self._boot_retries -= 1
+                    self._log(f"Startup connect retry ({self._boot_retries} left) ...")
+                    self._auto_connect()
             self._check_schedules()
         finally:
             self.after(15000, self._watchdog)
@@ -900,6 +909,7 @@ class App(ctk.CTk):
     def _disconnect_selected(self):
         addrs = self.ble.connected_addresses()
         self._manual_disc.update(addrs)
+        self._boot_retries = 0  # explicit user intent: stop startup retries
 
         async def _do():
             for a in addrs:
@@ -1303,8 +1313,15 @@ class App(ctk.CTk):
                          corner_radius=4, command=self._cal_changed).pack(anchor="w", pady=(0, 8))
         ctk.CTkButton(card, text="Reset", corner_radius=8, width=60,
                        fg_color="#443333", command=self._cal_reset).pack(anchor="e")
-        ctk.CTkButton(card, text="Test White", corner_radius=8, width=80,
-                       command=lambda: self._cal_test(255, 255, 255)).pack(anchor="e", pady=(0, 8))
+        trow = ctk.CTkFrame(card, fg_color="transparent")
+        trow.pack(anchor="e", pady=(0, 8))
+        for tname, (tr, tg, tb) in [("Test White", (255, 255, 255)),
+                                    ("Test Red", (255, 0, 0)),
+                                    ("Test Green", (0, 255, 0)),
+                                    ("Test Blue", (0, 0, 255))]:
+            ctk.CTkButton(trow, text=tname, corner_radius=8, width=80,
+                           command=lambda r=tr, g=tg, b=tb: self._cal_test(r, g, b)
+                           ).pack(side="left", padx=2)
 
         self._cal_vars: dict[str, ctk.DoubleVar] = {}
         self._cal_lbls: dict[str, ctk.CTkLabel] = {}
@@ -1903,6 +1920,7 @@ class App(ctk.CTk):
             ("Smoothing", "smooth", 0.05, 1.0),
             ("Brightness", "brightness", 1, 100),
             ("Min Delta", "min_delta", 0, 30),
+            ("Update every (s)", "interval", 0.05, 2.0),
         ]):
             row = ctk.CTkFrame(grid, fg_color="transparent")
             row.pack(fill="x", pady=3)
@@ -1926,13 +1944,13 @@ class App(ctk.CTk):
 
     AMBI_PRESETS = {
         "Movie": {"fps": 30, "smooth": 0.25, "brightness": 80, "min_delta": 8,
-                  "mode": "center", "sample": "average"},
+                  "interval": 0.10, "mode": "center", "sample": "average"},
         "Game": {"fps": 60, "smooth": 0.60, "brightness": 100, "min_delta": 3,
-                 "mode": "center", "sample": "vibrant"},
+                 "interval": 0.05, "mode": "center", "sample": "vibrant"},
         "Chill": {"fps": 15, "smooth": 0.15, "brightness": 60, "min_delta": 10,
-                  "mode": "center", "sample": "average"},
+                  "interval": 0.30, "mode": "center", "sample": "average"},
         "Party": {"fps": 60, "smooth": 0.80, "brightness": 100, "min_delta": 2,
-                  "mode": "center", "sample": "brightest"},
+                  "interval": 0.05, "mode": "center", "sample": "brightest"},
     }
 
     def _ambi_preset(self, name: str):
@@ -1943,6 +1961,7 @@ class App(ctk.CTk):
         self._ambi_vars["smooth"].set(p["smooth"])
         self._ambi_vars["brightness"].set(p["brightness"])
         self._ambi_vars["min_delta"].set(p["min_delta"])
+        self._ambi_vars["interval"].set(p["interval"])
         self._ambi_mode_var.set("Center 50% (fast)" if p["mode"] == "center" else "Full screen (slow)")
         self._ambi_sample_var.set(str(p["sample"]).capitalize())
         self._ambi_refresh()
@@ -1958,7 +1977,7 @@ class App(ctk.CTk):
     def _ambi_refresh(self, save: bool = True):
         for k, lbl in self._ambi_lbls.items():
             v = self._ambi_vars[k].get()
-            lbl.configure(text=f"{v:.0f}")
+            lbl.configure(text=f"{v:.2f}s" if k == "interval" else f"{v:.0f}")
         if save:
             self.cfg.ambi_fps = max(1.0, min(60.0, float(self._ambi_vars["fps"].get())))
             self.cfg.ambi_smooth = float(self._ambi_vars["smooth"].get())
@@ -1966,6 +1985,7 @@ class App(ctk.CTk):
             self.cfg.ambi_min_delta = int(self._ambi_vars["min_delta"].get())
             self.cfg.ambi_mode = self._ambi_mode()
             self.cfg.ambi_sample = self._ambi_sample()
+            self.cfg.ambi_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
             self._mark_dirty("ambi")
 
     def _toggle_ambi(self):
@@ -1989,6 +2009,7 @@ class App(ctk.CTk):
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
+        self.ambilight.update_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
         try:
             # start() needs the running loop: schedule it ON the loop thread
             self.runner.submit(self._ambi_begin_async()).result(timeout=10)
@@ -2030,9 +2051,6 @@ class App(ctk.CTk):
             return
         r, g, b = self.ambilight.last_color
         self._ambi_preview.configure(fg_color=rgb_hex(r, g, b))
-        self._ambi_stat.configure(
-            text=f"f={self.ambilight.frames} s={self.ambilight.sends} "
-                 f"cap={self.ambilight.last_capture_ms:.1f}ms rgb=({r},{g},{b})")
         try:
             for key, sw in self._cand_sw.items():
                 cr, cg, cb = self.ambilight.last_stats.get(key, (0, 0, 0))
@@ -2045,6 +2063,14 @@ class App(ctk.CTk):
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
+        self.ambilight.update_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
+        try:
+            eco = " eco" if self.ambilight.eco else ""
+            self._ambi_stat.configure(
+                text=f"f={self.ambilight.frames} s={self.ambilight.sends} "
+                     f"cap={self.ambilight.last_capture_ms:.1f}ms{eco} rgb=({r},{g},{b})")
+        except Exception:
+            pass
         self._ambi_refresh(save=False)
         self.after(500, self._ambi_tick)
 
@@ -2187,6 +2213,20 @@ class App(ctk.CTk):
 
 
 def main():
+    if "--allow-multi" not in sys.argv:
+        try:
+            from single_instance import acquire
+        except Exception:
+            acquire = None  # type: ignore
+        if acquire is not None and not acquire():
+            try:
+                ctypes.windll.user32.MessageBoxW(
+                    None,
+                    "Elf-Ambilight is already running.\nCheck the system tray.",
+                    "Elf-Ambilight", 0x40)
+            except Exception:
+                pass
+            return
     App().mainloop()
 
 

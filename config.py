@@ -102,6 +102,7 @@ class Config:
     ambi_min_delta: int = 6
     ambi_mode: str = "center"  # "center" (fast, 60fps ok) | "full" (slower)
     ambi_sample: str = "average"  # average | dominant | vibrant | brightest
+    ambi_interval: float = 0.1  # min seconds between strip updates
 
     # timers
     t1_hour: int = 7
@@ -256,6 +257,10 @@ class Config:
                     c.ambi_fps = max(1.0, min(60.0, float(c.ambi_fps)))
                 except Exception:
                     c.ambi_fps = 30.0
+                try:
+                    c.ambi_interval = max(0.02, min(5.0, float(c.ambi_interval)))
+                except Exception:
+                    c.ambi_interval = 0.1
                 return c
         except Exception:
             pass

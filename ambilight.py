@@ -1,10 +1,13 @@
-"""Screen-capture -> average color -> realtime BLE packets (Ambilight).
+"""Screen-capture -> sampled color -> crossfaded realtime BLE packets (Ambilight).
 
 Performance design (60fps capable):
 - One mss instance per capture thread (thread-local), reused across frames.
-  Creating mss.mss() per frame re-enumerates monitors (~5-15ms) — avoided.
-- Averaging via PIL.ImageStat (C loop), not a Python per-pixel loop.
-- Sends stay delta-gated: 60fps loop does NOT mean 60 BLE writes/sec.
+  Creating mss.MSS() per frame re-enumerates monitors (~5-15ms) — avoided.
+- One grab analyzed once into all sampling candidates; single Python pass
+  over a 48px thumbnail (box pre-shrink keeps it ~1ms).
+- The strip is crossfaded: an eased position chases the target and packets
+  go out at most every update_interval seconds — smooth, no BLE flooding.
+- Idle backoff: identical thumbnails put the loop into 4Hz eco polling.
 """
 from __future__ import annotations
 import asyncio
@@ -18,16 +21,17 @@ from protocol import pkt_color_realtime
 class Ambilight:
     def __init__(self, ble, get_targets, fps: float = 30.0, smooth: float = 0.35,
                  min_delta: int = 6, brightness: int = 100,
-                 capture_mode: str = "center"):
+                 capture_mode: str = "center", update_interval: float = 0.1):
         """
         ble: ElfBLE instance
         get_targets: callable() -> list[str] (connected MACs to drive)
-        fps: loop rate, 1..60 (capture+average only; BLE sends are delta-gated)
-        smooth: 0..1 exponential smoothing (higher = snappier)
+        fps: capture loop rate, 1..60
+        smooth: 0..1 crossfade rate (LOWER = slower/smoother transitions)
         min_delta: skip send if r/g/b each changed less than this
         brightness: 0..100 scale applied to captured color
         capture_mode: 'center' (middle 50%, ~10ms, 60fps capable) or
                       'full' (whole screen, ~35ms at 1440p, use <=25fps)
+        update_interval: min seconds between strip updates (pacing)
         """
         self.ble = ble
         self.get_targets = get_targets
@@ -38,15 +42,21 @@ class Ambilight:
         self.brightness = max(1, min(100, brightness))
         self.capture_mode = capture_mode if capture_mode in ("center", "full") else "center"
         self.sample_mode = "average"  # average | dominant | vibrant | brightest
+        self.update_interval = max(0.02, min(5.0, update_interval))
         self.last_stats: dict[str, tuple[int, int, int]] = {}
         self._task: asyncio.Task | None = None
         self._running = False
         self.last_color = (0, 0, 0)
         self._sm = [0.0, 0.0, 0.0]
+        self._shown = [0.0, 0.0, 0.0]  # crossfade position (floats)
         self.last_send = 0.0
         self.frames = 0
         self.sends = 0
         self.last_capture_ms = 0.0
+        self.eco = False  # idle backoff active (still screen)
+        self._still = 0
+        self._prev_thumb: bytes | None = None
+        self._thumb_bytes: bytes = b""
         self._tls = threading.local()
 
     def start(self):
@@ -96,13 +106,34 @@ class Ambilight:
                 "width": w // 2, "height": h // 2}
 
     @staticmethod
-    def _analyze_small(img):
+    def _ease_step(shown: list[float], target: tuple[int, int, int], f: float
+                   ) -> tuple[int, int, int]:
+        """Move crossfade position toward target; min 1-unit step so small
+        gaps always close. Returns integer shown color. Monotonic, exact."""
+        out = []
+        for i, t in enumerate(target):
+            d = t - shown[i]
+            step = d * f
+            if d != 0 and abs(step) < 1.0:
+                step = 1.0 if d > 0 else -1.0
+            v = shown[i] + step
+            if d > 0 and v > t:
+                v = float(t)
+            elif d < 0 and v < t:
+                v = float(t)
+            shown[i] = v
+            out.append(int(round(v)))
+        return (out[0], out[1], out[2])
+
+    def _analyze_small(self, img):
         """One pass over a tiny image -> all sampling candidates.
 
         average:   mean color (classic ambilight)
         dominant:  most frequent color (12-bit quantized histogram peak)
         vibrant:   pixel maximizing saturation*brightness (neon pop)
         brightest: pixel with max r+g+b (highlights/flashes)
+
+        Also stashes the thumbnail bytes for still-screen detection.
         """
         from PIL import Image
         w, h = img.size
@@ -112,6 +143,7 @@ class Ambilight:
         th = max(1, round(h * 48 / max(1, w)))
         resample = getattr(Image, "Resampling", Image).BILINEAR
         small = img.resize((48, th), resample) if (w, h) != (48, th) else img
+        self._thumb_bytes = small.tobytes()
         px = list(small.getdata())
         n = max(1, len(px))
         sr = sg = sb = 0
@@ -175,13 +207,21 @@ class Ambilight:
 
     async def _loop(self):
         period = 1.0 / max(1.0, min(60.0, self.fps))
+        still_needed = max(1, int(round(self.fps)))  # ~1s of identical frames
         loop = asyncio.get_running_loop()
+        self._shown = [float(c) for c in self.last_color]
         while self._running:
             t0 = time.monotonic()
             try:
                 r, g, b = await loop.run_in_executor(None, self.capture_selected)
                 self.frames += 1
-                # smooth
+                # still-screen detection (exact thumbnail match)
+                if self._thumb_bytes == self._prev_thumb and self._prev_thumb:
+                    self._still += 1
+                else:
+                    self._still = 0
+                    self._prev_thumb = self._thumb_bytes
+                # capture smoothing (noise reduction)
                 s = self.smooth
                 self._sm[0] += (r - self._sm[0]) * s
                 self._sm[1] += (g - self._sm[1]) * s
@@ -193,20 +233,31 @@ class Ambilight:
                         sr, sg, sb = self.calibrate(sr, sg, sb)
                     except Exception:
                         pass
+                # crossfade toward target, then pace the strip updates
+                cur = self._ease_step(self._shown, (sr, sg, sb), s)
                 lr, lg, lb = self.last_color
-                if (abs(sr - lr) >= self.min_delta or abs(sg - lg) >= self.min_delta
-                        or abs(sb - lb) >= self.min_delta):
+                now = time.monotonic()
+                if (cur != (lr, lg, lb)
+                        and (now - self.last_send) >= self.update_interval
+                        and (abs(cur[0] - lr) >= self.min_delta
+                             or abs(cur[1] - lg) >= self.min_delta
+                             or abs(cur[2] - lb) >= self.min_delta)):
                     targets = [a for a in self.get_targets() if self.ble.is_connected(a)]
                     if targets:
-                        pkt = pkt_color_realtime(sr, sg, sb)
+                        pkt = pkt_color_realtime(*cur)
                         await self.ble.write_many(targets, pkt, response=False)
                         self.sends += 1
-                        self.last_color = (sr, sg, sb)
+                        self.last_color = cur
                         self.last_send = time.monotonic()
             except asyncio.CancelledError:
                 break
             except Exception:
                 await asyncio.sleep(0.25)
             dt = time.monotonic() - t0
-            await asyncio.sleep(max(0.0, period - dt))
+            if self._still > still_needed:
+                self.eco = True  # still screen: 4Hz polling instead of full rate
+                await asyncio.sleep(max(0.0, 0.25 - dt))
+            else:
+                self.eco = False
+                await asyncio.sleep(max(0.0, period - dt))
         self._running = False
