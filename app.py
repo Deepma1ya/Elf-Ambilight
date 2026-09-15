@@ -1210,6 +1210,8 @@ class App(ctk.CTk):
         self.group_menu.pack(side="left", padx=4)
         ctk.CTkButton(g_frame, text="New", corner_radius=8, width=50,
                        command=self._new_group).pack(side="left", padx=4)
+        ctk.CTkButton(g_frame, text="Rename", corner_radius=8, width=64,
+                       fg_color=ACCENT_DIM, command=self._rename_group).pack(side="left", padx=4)
 
         # group members
         self.members_frame = ctk.CTkScrollableFrame(f, fg_color=CARD, corner_radius=10,
@@ -1539,6 +1541,39 @@ class App(ctk.CTk):
             top.destroy()
 
         ctk.CTkButton(top, text="Create", corner_radius=8, command=_ok).pack(pady=6)
+
+    def _rename_group(self):
+        old = self.cfg.selected_group
+        top = ctk.CTkToplevel(self)
+        top.title("Rename Group")
+        top.geometry("300x140")
+        top.configure(fg_color=BG)
+        top.grab_set()
+        ctk.CTkLabel(top, text="Rename '%s' to:" % old, fg_color="transparent").pack(pady=(12, 4))
+        ent = ctk.CTkEntry(top, width=240, corner_radius=8)
+        ent.insert(0, old)
+        ent.pack(pady=4)
+        ent.focus()
+        ent.select_range(0, "end")
+
+        def _ok():
+            n = ent.get().strip()
+            if n and n != old:
+                if n in self.cfg.groups:
+                    self._log(f"Group '{n}' already exists.")
+                else:
+                    groups = {}
+                    for k, v in self.cfg.groups.items():
+                        groups[n if k == old else k] = v
+                    self.cfg.groups = groups
+                    self.cfg.selected_group = n
+                    self._save_devices_state()
+                    self._refresh_devices()
+                    self._refresh_groups()
+                    self._log(f"Renamed '{old}' to '{n}'.")
+            top.destroy()
+
+        ctk.CTkButton(top, text="Rename", corner_radius=8, command=_ok).pack(pady=6)
 
     # ════════════════════════════════════════════════════════════════
     # COLOR PAGE
