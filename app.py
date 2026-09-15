@@ -530,7 +530,7 @@ class App(ctk.CTk):
             command=lambda: self._send_power(True),
         ).pack(fill="x", pady=2)
         self.save_btn = ctk.CTkButton(
-            sb, height=36, corner_radius=R_PILL,
+            sb, text="Save", height=36, corner_radius=R_PILL,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=FG,
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._save_all,
