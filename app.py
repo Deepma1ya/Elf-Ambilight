@@ -162,7 +162,8 @@ class App(ctk.CTk):
         self._bt_state: str = "unknown"
         self._tray = None
         self.found: dict[str, FoundDevice] = {}
-        self.ambilight = Ambilight(self.ble, self._ambi_targets)
+        self.ambilight = Ambilight(self.ble, self._ambi_targets,
+                                   crossfade=self.cfg.ambi_crossfade)
         self.ambilight.calibrate = self.cfg.cal_apply
         self._color = (self.cfg.last_r, self.cfg.last_g, self.cfg.last_b)
 
@@ -2011,6 +2012,16 @@ class App(ctk.CTk):
             sw.pack()
             self._cand_sw[key] = sw
 
+        # Smooth vs instant toggle
+        xf = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
+        xf.pack(fill="x", pady=(0, 8))
+        self._ambi_crossfade_var = ctk.BooleanVar(value=self.cfg.ambi_crossfade)
+        ctk.CTkSwitch(xf, text="Smooth crossfade", variable=self._ambi_crossfade_var,
+                      progress_color=ACCENT, font=ctk.CTkFont(size=12, weight="bold"),
+                      command=self._ambi_crossfade_toggled).pack(side="left", padx=8)
+        ctk.CTkLabel(xf, text="ON = fade at FPS rate  \u00b7  OFF = instant jump every interval",
+                     text_color=MUTED, font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
+
         grid = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         grid.pack(fill="x")
         self._ambi_vars: dict[str, ctk.DoubleVar] = {}
@@ -2020,7 +2031,7 @@ class App(ctk.CTk):
             ("Smoothing", "smooth", 0.05, 1.0),
             ("Brightness", "brightness", 1, 100),
             ("Min Delta", "min_delta", 0, 30),
-            ("Update every (s)", "interval", 0.05, 2.0),
+            ("Update / Fade (s)", "interval", 0.05, 2.0),
         ]):
             row = ctk.CTkFrame(grid, fg_color="transparent")
             row.pack(fill="x", pady=3)
@@ -2044,13 +2055,13 @@ class App(ctk.CTk):
 
     AMBI_PRESETS = {
         "Movie": {"fps": 30, "smooth": 0.25, "brightness": 80, "min_delta": 8,
-                  "interval": 0.10, "mode": "center", "sample": "average"},
+                  "interval": 0.80, "mode": "center", "sample": "average", "crossfade": True},
         "Game": {"fps": 60, "smooth": 0.60, "brightness": 100, "min_delta": 3,
-                 "interval": 0.05, "mode": "center", "sample": "vibrant"},
+                 "interval": 0.05, "mode": "center", "sample": "vibrant", "crossfade": False},
         "Chill": {"fps": 15, "smooth": 0.15, "brightness": 60, "min_delta": 10,
-                  "interval": 0.30, "mode": "center", "sample": "average"},
-        "Party": {"fps": 60, "smooth": 0.80, "brightness": 100, "min_delta": 2,
-                  "interval": 0.05, "mode": "center", "sample": "brightest"},
+                  "interval": 1.00, "mode": "center", "sample": "average", "crossfade": True},
+        "Party": {"fps": 30, "smooth": 0.35, "brightness": 100, "min_delta": 2,
+                  "interval": 0.30, "mode": "center", "sample": "brightest", "crossfade": True},
     }
 
     def _ambi_preset(self, name: str):
@@ -2064,6 +2075,8 @@ class App(ctk.CTk):
         self._ambi_vars["interval"].set(p["interval"])
         self._ambi_mode_var.set("Center 50% (fast)" if p["mode"] == "center" else "Full screen (slow)")
         self._ambi_sample_var.set(str(p["sample"]).capitalize())
+        if "crossfade" in p:
+            self._ambi_crossfade_var.set(bool(p["crossfade"]))
         self._ambi_refresh()
         self._log(f"Ambilight preset '{name}' staged (unsaved).")
 
@@ -2073,6 +2086,15 @@ class App(ctk.CTk):
             return s if s in ("average", "dominant", "vibrant", "brightest") else "average"
         except Exception:
             return "average"
+
+    def _ambi_crossfade_toggled(self):
+        try:
+            self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
+            self.ambilight.crossfade = self.cfg.ambi_crossfade
+            self._mark_dirty("ambi")
+            self._log("Ambilight " + ("smooth fade ON." if self.cfg.ambi_crossfade else "direct jump ON."))
+        except Exception:
+            pass
 
     def _ambi_refresh(self, save: bool = True):
         for k, lbl in self._ambi_lbls.items():
@@ -2086,6 +2108,11 @@ class App(ctk.CTk):
             self.cfg.ambi_mode = self._ambi_mode()
             self.cfg.ambi_sample = self._ambi_sample()
             self.cfg.ambi_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
+            try:
+                self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
+                self.ambilight.crossfade = self.cfg.ambi_crossfade
+            except Exception:
+                pass
             self._mark_dirty("ambi")
 
     def _toggle_ambi(self):
@@ -2110,6 +2137,10 @@ class App(ctk.CTk):
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
         self.ambilight.update_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
+        try:
+            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
+        except Exception:
+            pass
         try:
             # start() needs the running loop: schedule it ON the loop thread
             self.runner.submit(self._ambi_begin_async()).result(timeout=10)
@@ -2164,6 +2195,10 @@ class App(ctk.CTk):
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
         self.ambilight.update_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
+        try:
+            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
+        except Exception:
+            pass
         try:
             eco = " eco" if self.ambilight.eco else ""
             self._ambi_stat.configure(

@@ -102,7 +102,8 @@ class Config:
     ambi_min_delta: int = 6
     ambi_mode: str = "center"  # "center" (fast, 60fps ok) | "full" (slower)
     ambi_sample: str = "average"  # average | dominant | vibrant | brightest
-    ambi_interval: float = 0.1  # min seconds between strip updates
+    ambi_interval: float = 0.1  # min seconds between strip updates (also fade duration when crossfade on)
+    ambi_crossfade: bool = True  # smooth fade at FPS rate vs instant jump
 
     # timers
     t1_hour: int = 7
@@ -261,6 +262,10 @@ class Config:
                     c.ambi_interval = max(0.02, min(5.0, float(c.ambi_interval)))
                 except Exception:
                     c.ambi_interval = 0.1
+                try:
+                    c.ambi_crossfade = bool(c.ambi_crossfade)
+                except Exception:
+                    c.ambi_crossfade = True
                 return c
         except Exception:
             pass

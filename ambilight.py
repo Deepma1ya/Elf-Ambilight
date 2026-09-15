@@ -21,7 +21,8 @@ from protocol import pkt_color_realtime
 class Ambilight:
     def __init__(self, ble, get_targets, fps: float = 30.0, smooth: float = 0.35,
                  min_delta: int = 6, brightness: int = 100,
-                 capture_mode: str = "center", update_interval: float = 0.1):
+                 capture_mode: str = "center", update_interval: float = 0.1,
+                 crossfade: bool = True):
         """
         ble: ElfBLE instance
         get_targets: callable() -> list[str] (connected MACs to drive)
@@ -31,7 +32,10 @@ class Ambilight:
         brightness: 0..100 scale applied to captured color
         capture_mode: 'center' (middle 50%, ~10ms, 60fps capable) or
                       'full' (whole screen, ~35ms at 1440p, use <=25fps)
-        update_interval: min seconds between strip updates (pacing)
+        update_interval: min seconds between strip updates (also fade duration
+                         when crossfade is on — new screen colour is sampled
+                         every interval, and the strip fades to it at FPS rate)
+        crossfade: True = smooth fade at FPS rate, False = instant jump
         """
         self.ble = ble
         self.get_targets = get_targets
@@ -43,6 +47,7 @@ class Ambilight:
         self.capture_mode = capture_mode if capture_mode in ("center", "full") else "center"
         self.sample_mode = "average"  # average | dominant | vibrant | brightest
         self.update_interval = max(0.02, min(5.0, update_interval))
+        self.crossfade = bool(crossfade)
         self.last_stats: dict[str, tuple[int, int, int]] = {}
         self._task: asyncio.Task | None = None
         self._running = False
@@ -57,10 +62,13 @@ class Ambilight:
         self._prev_thumb: bytes | None = None
         self._thumb_bytes: bytes = b""
         self._tls = threading.local()
-        # temporal dominant lock — prevents flickering on mixed-color screens
+        # temporal lock — prevents flickering on mixed-color screens
         self._dom_target: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._dom_ema: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._dom_ema_init = False
+        # crossfade state: target only refreshes every update_interval
+        self._fade_target: tuple[int, int, int] = (0, 0, 0)
+        self._fade_t0: float = 0.0
 
     def start(self):
         """Must be called from inside the asyncio loop thread (create_task
@@ -262,6 +270,12 @@ class Ambilight:
         still_needed = max(1, int(round(self.fps)))  # ~1s of identical frames
         loop = asyncio.get_running_loop()
         self._shown = [float(c) for c in self.last_color]
+        # smooth crossfade state
+        if not hasattr(self, "_last_sent"):
+            self._last_sent: tuple[int, int, int] = tuple(self.last_color)  # type: ignore
+        if self._fade_t0 == 0.0:
+            self._fade_target = tuple(self.last_color)  # type: ignore
+            self._fade_t0 = time.monotonic()
         while self._running:
             t0 = time.monotonic()
             try:
@@ -275,10 +289,8 @@ class Ambilight:
                     self._prev_thumb = self._thumb_bytes
 
                 # --- temporal target lock ---
-                # Apply EMA on the raw sample so the crossfade target
-                # doesn't jump between nearby hues each frame.
                 raw = (float(r), float(g), float(b))
-                ts = 0.25  # EMA factor (lower = more stable, 0.25 ≈ 4-frame settling)
+                ts = 0.25  # EMA factor (lower = more stable)
                 if not self._dom_ema_init:
                     self._dom_ema = raw
                     self._dom_ema_init = True
@@ -288,9 +300,6 @@ class Ambilight:
                         self._dom_ema[1] + (raw[1] - self._dom_ema[1]) * ts,
                         self._dom_ema[2] + (raw[2] - self._dom_ema[2]) * ts,
                     )
-
-                # lock: only update target if new color differs enough
-                # (prevents flicker when screen has many competing colors)
                 diff = max(abs(self._dom_ema[i] - self._dom_target[i]) for i in range(3))
                 if diff > 3.0:
                     self._dom_target = self._dom_ema
@@ -305,23 +314,52 @@ class Ambilight:
                     except Exception:
                         pass
 
-                # --- crossfade (runs every frame at FPS rate) ---
-                cur = self._ease_step(self._shown, (sr, sg, sb), self.smooth)
-
-                # --- packet send (throttled by update_interval) ---
                 now = time.monotonic()
-                lr, lg, lb = self.last_color
-                self.last_color = cur  # advance visual position every frame
-                if ((now - self.last_send) >= self.update_interval
-                        and (abs(cur[0] - lr) >= self.min_delta
-                             or abs(cur[1] - lg) >= self.min_delta
-                             or abs(cur[2] - lb) >= self.min_delta)):
-                    targets = [a for a in self.get_targets() if self.ble.is_connected(a)]
-                    if targets:
-                        pkt = pkt_color_realtime(*cur)
-                        await self.ble.write_many(targets, pkt, response=False)
-                        self.sends += 1
-                        self.last_send = time.monotonic()
+
+                if self.crossfade:
+                    # ── smooth: new target sampled every update_interval,
+                    #    strip fades to it at FPS rate (ease_step) ──
+                    if (now - self._fade_t0) >= self.update_interval:
+                        if (abs(sr - self._fade_target[0]) >= 2
+                                or abs(sg - self._fade_target[1]) >= 2
+                                or abs(sb - self._fade_target[2]) >= 2):
+                            self._fade_target = (sr, sg, sb)
+                            self._fade_t0 = now
+                    cur = self._ease_step(self._shown, self._fade_target, self.smooth)
+                    lr, lg, lb = self.last_color
+                    self.last_color = cur
+                    # send every frame (at FPS rate) when the eased colour moved
+                    if (cur != (lr, lg, lb)
+                            and (abs(cur[0] - lr) >= self.min_delta
+                                 or abs(cur[1] - lg) >= self.min_delta
+                                 or abs(cur[2] - lb) >= self.min_delta)):
+                        targets = [a for a in self.get_targets() if self.ble.is_connected(a)]
+                        if targets:
+                            pkt = pkt_color_realtime(*cur)
+                            await self.ble.write_many(targets, pkt, response=False)
+                            self.sends += 1
+                            self._last_sent = cur
+                            self.last_send = time.monotonic()
+                else:
+                    # ── direct: instant jump, throttled by update_interval ──
+                    cur = (sr, sg, sb)
+                    self._shown = [float(c) for c in cur]
+                    self.last_color = cur  # preview follows screen instantly
+                    lr, lg, lb = self._last_sent
+                    if ((now - self.last_send) >= self.update_interval
+                            and cur != (lr, lg, lb)
+                            and (abs(cur[0] - lr) >= self.min_delta
+                                 or abs(cur[1] - lg) >= self.min_delta
+                                 or abs(cur[2] - lb) >= self.min_delta)):
+                        targets = [a for a in self.get_targets() if self.ble.is_connected(a)]
+                        if targets:
+                            pkt = pkt_color_realtime(*cur)
+                            await self.ble.write_many(targets, pkt, response=False)
+                            self.sends += 1
+                            self._last_sent = cur
+                            self.last_send = time.monotonic()
+                            self._fade_target = cur
+                            self._fade_t0 = now
             except asyncio.CancelledError:
                 break
             except Exception:
