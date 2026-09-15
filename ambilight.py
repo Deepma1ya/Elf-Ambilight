@@ -29,11 +29,10 @@ class Ambilight:
         ble: ElfBLE instance
         get_targets: callable() -> list[str] (connected MACs to drive)
         fps: capture loop rate, 1..60
-        smooth: 0..1 crossfade rate (LOWER = slower/smoother transitions)
+        smooth: 0..1 crossfade rate (LOWER = slower/smoother, 0.01 = ultra-slow silky)
         min_delta: skip send if r/g/b each changed less than this
         brightness: 0..100 scale applied to captured color
-        capture_mode: 'center' (middle 50%, ~10ms, 60fps capable) or
-                      'full' (whole screen, ~35ms at 1440p, use <=25fps)
+        capture_mode: 'center' or 'full' — both 60fps capable via low-res 50px + dxcam
         update_interval: min seconds between strip updates (also fade duration
                          when crossfade is on — new screen colour is sampled
                          every interval, and the strip fades to it at FPS rate)
@@ -43,7 +42,7 @@ class Ambilight:
         self.get_targets = get_targets
         self.calibrate: Optional[Callable[[int, int, int], tuple[int, int, int]]] = None
         self.fps = max(1.0, min(60.0, fps))
-        self.smooth = max(0.05, min(1.0, smooth))
+        self.smooth = max(0.01, min(1.0, smooth))  # 0.01 = ultra-slow silky
         self.min_delta = max(0, min_delta)
         self.brightness = max(1, min(100, brightness))
         self.capture_mode = capture_mode if capture_mode in ("center", "full") else "center"
@@ -168,75 +167,8 @@ class Ambilight:
         return {"left": mon["left"] + w // 4, "top": mon["top"] + h // 4,
                 "width": w // 2, "height": h // 2}
 
-    def _gdi_lowres_grab(self, box, tw, th):
-        """Try GDI StretchBlt to capture `box` directly at `tw×th` (very fast,
-        ~2-4 ms for full screen vs ~30 ms via mss at native res). Returns PIL
-        Image or None on failure (fallback to mss)."""
-        try:
-            import ctypes
-            from ctypes import wintypes
-            from PIL import Image
-            left, top, w, h = int(box["left"]), int(box["top"]), int(box["width"]), int(box["height"])
-            if w <= 0 or h <= 0 or tw <= 0 or th <= 0:
-                return None
-            user32 = ctypes.windll.user32
-            gdi32 = ctypes.windll.gdi32
-            # need a screen DC (0 = entire virtual screen)
-            hdc_screen = user32.GetDC(0)
-            if not hdc_screen:
-                return None
-            hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
-            if not hdc_mem:
-                user32.ReleaseDC(0, hdc_screen)
-                return None
-            # DIB section at target size (32-bit, top-down)
-            class BITMAPINFOHEADER(ctypes.Structure):
-                _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
-                            ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
-                            ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
-                            ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
-                            ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
-                            ("biClrImportant", wintypes.DWORD)]
-            class BITMAPINFO(ctypes.Structure):
-                _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
-            bmi = BITMAPINFO()
-            bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-            bmi.bmiHeader.biWidth = tw
-            bmi.bmiHeader.biHeight = -th  # top-down
-            bmi.bmiHeader.biPlanes = 1
-            bmi.bmiHeader.biBitCount = 32
-            bmi.bmiHeader.biCompression = 0  # BI_RGB
-            # create DIB section
-            ppvBits = ctypes.c_void_p()
-            hbm = gdi32.CreateDIBSection(hdc_screen, ctypes.byref(bmi), 0, ctypes.byref(ppvBits), None, 0)
-            if not hbm:
-                gdi32.DeleteDC(hdc_mem)
-                user32.ReleaseDC(0, hdc_screen)
-                return None
-            h_old = gdi32.SelectObject(hdc_mem, hbm)
-            # best quality stretch (HALFTONE = 4) — also need SetBrushOrgEx after
-            try:
-                gdi32.SetStretchBltMode(hdc_mem, 4)
-            except Exception:
-                pass
-            # StretchBlt from screen to our low-res DIB (hardware/GDI does the downscale)
-            SRCCOPY = 0x00CC0020
-            ok = gdi32.StretchBlt(hdc_mem, 0, 0, tw, th, hdc_screen, left, top, w, h, SRCCOPY)
-            # read bits
-            img = None
-            if ok:
-                # ppvBits points to BGRA bytes, row stride = tw*4
-                buf = ctypes.string_at(ppvBits, tw * th * 4)
-                # BGRA -> RGB via frombytes (BGRX)
-                img = Image.frombytes("RGB", (tw, th), buf, "raw", "BGRX")
-            # cleanup
-            gdi32.SelectObject(hdc_mem, h_old)
-            gdi32.DeleteObject(hbm)
-            gdi32.DeleteDC(hdc_mem)
-            user32.ReleaseDC(0, hdc_screen)
-            return img
-        except Exception:
-            return None
+    # GDI low-res path removed — caused cursor flicker and was not faster than
+    # dxcam/mss on this hardware. Keeping dxcam (GPU) + mss (CPU) only.
 
     @staticmethod
     def _ease_step(shown: list[float], target: tuple[int, int, int], f: float
@@ -371,20 +303,18 @@ class Ambilight:
         t0 = time.perf_counter()
         sct = self._thread_sct()
         box = self._capture_box(sct)
-        # high-FPS path: dxcam Desktop Duplication (~12-16 ms for full 1440p → 60fps)
-        # falls back to GDI low-res then mss
+        # high-FPS GPU path: dxcam Desktop Duplication (~12-16 ms for full 1440p → 60fps)
+        # mss fallback is ~50 ms for full 1440p, ~25 ms for center — dxcam avoids cursor flicker
         if self.fps >= 30:
             try:
                 cam = self._thread_dxcam(box)
                 if cam is not None:
                     frame = cam.get_latest_frame()
                     if frame is not None:
-                        # frame is BGRA numpy (h×w×4)
                         bh = max(1, int(box["height"]))
                         bw = max(1, int(box["width"]))
                         th = 50
                         tw = max(1, round(bw * th / max(1, bh)))
-                        # BGRA numpy → RGB PIL then resize (PIL only, no cv2 needed)
                         h, w = frame.shape[:2]
                         img_full = Image.frombytes("RGB", (w, h), frame.tobytes(), "raw", "BGRX")
                         resample = getattr(Image, "Resampling", Image).BILINEAR
@@ -395,21 +325,7 @@ class Ambilight:
                         return stats
             except Exception:
                 pass
-        # fast GDI path: capture directly at ~50px tall (89×50 for 16:9)
-        try:
-            bh = max(1, int(box["height"]))
-            bw = max(1, int(box["width"]))
-            th = 50
-            tw = max(1, round(bw * th / max(1, bh)))
-            img_low = self._gdi_lowres_grab(box, tw, th)
-            if img_low is not None:
-                stats = self._analyze_small(img_low)
-                self.last_stats = stats
-                self.last_capture_ms = (time.perf_counter() - t0) * 1000.0
-                return stats
-        except Exception:
-            pass
-        # fallback: mss at native res then downscale in _analyze_small
+        # fallback: mss at native res then downscale in _analyze_small (no cursor flicker — SRCCOPY without CAPTUREBLT)
         shot = sct.grab(box)
         img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         stats = self._analyze_small(img)
@@ -492,9 +408,10 @@ class Ambilight:
                             self._fade_target = (sr, sg, sb)
                             self._fade_t0 = now
                     cur = self._ease_step(self._shown, self._fade_target, self.smooth)
-                    lr, lg, lb = self.last_color
                     self.last_color = cur
-                    # send every frame (at FPS rate) when the eased colour moved
+                    lr, lg, lb = self._last_sent
+                    # send when accumulated change since last *sent* exceeds min_delta
+                    # (per-frame check would stall ultra-slow 0.01 where each step < min_delta)
                     if (cur != (lr, lg, lb)
                             and (abs(cur[0] - lr) >= self.min_delta
                                  or abs(cur[1] - lg) >= self.min_delta

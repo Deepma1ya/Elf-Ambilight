@@ -2038,7 +2038,7 @@ class App(ctk.CTk):
         self._ambi_row_lbls: dict[str, ctk.CTkLabel] = {}
         for i, (txt, key, lo, hi) in enumerate([
             ("FPS (1-60)", "fps", 1, 60),
-            ("Smoothing", "smooth", 0.05, 1.0),
+            ("Smoothing", "smooth", 0.01, 1.0),
             ("Brightness", "brightness", 1, 100),
             ("Min Delta", "min_delta", 0, 30),
             ("Update / Fade (s)", "interval", 0.05, 2.0),
@@ -2059,7 +2059,7 @@ class App(ctk.CTk):
             self._ambi_sliders[key] = sld
             self._ambi_row_lbls[key] = rlbl
         # hint for Smoothing
-        ctk.CTkLabel(grid, text="Smoothing: 0.05 = silky slow  \u00b7  1.0 = instant  \u00b7  try 0.15–0.35",
+        ctk.CTkLabel(grid, text="Smoothing: 0.01 = ultra-slow silky  \u00b7  1.0 = instant  \u00b7  try 0.02–0.35",
                      text_color=MUTED, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=8, pady=(2, 0))
         # sync crossfade UI (interval label + smoothing enable)
         try:
