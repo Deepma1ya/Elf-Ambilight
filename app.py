@@ -1249,8 +1249,8 @@ class App(ctk.CTk):
                               font=ctk.CTkFont(size=10)).pack(side="left", padx=2)
             ctk.CTkButton(row, text="\u2713" if in_current else "+",
                            width=30, height=24, corner_radius=R_SMALL,
-                           fg_color="transparent" if in_current else ACCENT,
-                           hover_color=ACCENT_HOVER if not in_current else "transparent",
+                           fg_color=CARD_HOVER if in_current else ACCENT,
+                           hover_color=CARD_HOVER if in_current else ACCENT_HOVER,
                            text_color=MUTED if in_current else FG,
                            state="disabled" if in_current else "normal",
                            font=ctk.CTkFont(size=12, weight="bold"),
@@ -1272,7 +1272,7 @@ class App(ctk.CTk):
                           text_color=GREEN if connected else MUTED,
                           font=ctk.CTkFont(size=11)).pack(side="left")
             ctk.CTkButton(r, text="\u00d7", width=28, height=22, corner_radius=R_SMALL,
-                           fg_color="transparent", hover_color="#2a1a1a", text_color=RED,
+                           fg_color=CARD, hover_color="#2a1a1a", text_color=RED,
                            font=ctk.CTkFont(size=13, weight="bold"),
                            command=lambda a=addr: self._group_remove_one(a)).pack(side="right", padx=4)
         self.dev_status.configure(
@@ -2123,7 +2123,7 @@ class App(ctk.CTk):
         for i, m in enumerate(MODES):
             b = ctk.CTkButton(
                 self.mode_list, text=f"{i:02d}  {m}", anchor="w",
-                fg_color="transparent", hover_color=CARD_HOVER,
+                fg_color=CARD, hover_color=CARD_HOVER,  # transparent fg crashes CTkButton
                 text_color=FG,
                 font=ctk.CTkFont(size=12), height=30, corner_radius=R_SMALL,
                 command=lambda idx=i: self._send_mode(idx),
