@@ -60,6 +60,29 @@ def _is_elevated() -> bool:
         return False
 
 
+def is_elevated() -> bool:
+    return _is_elevated()
+
+
+def relaunch_elevated_task(enable: bool):
+    """Relaunch self via UAC prompt to flip the task. The elevated copy
+    handles --task on|off and exits without GUI. Raises if the user
+    denies the prompt or the launch fails."""
+    import ctypes
+    flag = "on" if enable else "off"
+    if getattr(sys, "frozen", False):
+        exe, params = sys.executable, f"--task {flag}"
+    else:
+        script = Path(__file__).resolve().parent / "app.py"
+        exe, params = sys.executable, f'"{script}" --task {flag}'
+    try:
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 0)
+    except OSError as e:
+        raise RuntimeError("admin approval needed (prompt denied)") from e
+    if int(rc or 0) <= 32:
+        raise RuntimeError(f"elevation failed (code {int(rc or 0)})")
+
+
 def task_enabled() -> bool:
     try:
         import subprocess

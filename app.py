@@ -26,7 +26,8 @@ from bt_helper import (
     bt_service_running, try_enable_bluetooth, open_bluetooth_settings,
     looks_like_bt_off,
 )
-from startup_helper import startup_enabled, set_startup, task_enabled, set_task
+from startup_helper import (startup_enabled, set_startup, task_enabled,
+                              set_task, is_elevated, relaunch_elevated_task)
 
 
 def _find_icon_path() -> Optional[str]:
@@ -3138,17 +3139,38 @@ class App(ctk.CTk):
             messagebox.showinfo("High priority startup",
                                 "Turn on 'Start app with Windows' first.")
             return
+        want = bool(self._task_var.get())
         try:
-            set_task(bool(self._task_var.get()), minimized=self.cfg.start_minimized)
-            self._log("High priority startup " + ("ON (elevated logon task)." if self._task_var.get() else "OFF."))
+            if is_elevated():
+                set_task(want, minimized=self.cfg.start_minimized)
+                self._log("High priority startup " + ("ON (elevated logon task)." if want else "OFF."))
+                return
+            # not elevated: revert display, ask Windows for admin, poll result
+            self._task_var.set(task_enabled())
+            relaunch_elevated_task(want)
+            self._log("Waiting for admin approval ...")
+            self.after(4000, lambda: self._task_poll(want, 4))
         except Exception as e:
             self._log(f"High priority startup: {e}")
             messagebox.showwarning("High priority startup",
-                                   f"Could not enable:\n\n{e}")
+                                   f"Could not change setting:\n\n{e}")
             try:
                 self._task_var.set(task_enabled())
             except Exception:
                 pass
+
+    def _task_poll(self, want: bool, tries: int):
+        """Recheck the real task state after the UAC round-trip."""
+        try:
+            have = task_enabled()
+            if have == want or tries <= 0:
+                self._task_var.set(have)
+                self._log("High priority startup " + ("ON." if have else "OFF."))
+                return
+        except Exception:
+            if tries <= 0:
+                return
+        self.after(5000, lambda: self._task_poll(want, tries - 1))
 
     def _startup_toggled(self):
         try:
@@ -3188,6 +3210,19 @@ class App(ctk.CTk):
 
 
 def main():
+    if "--task" in sys.argv:
+        # elevated helper: flip the startup task, no GUI, then exit
+        try:
+            on = sys.argv[sys.argv.index("--task") + 1].lower() == "on"
+        except Exception:
+            print("usage: --task on|off")
+            return
+        try:
+            set_task(on, minimized=bool(Config.load().start_minimized))
+            print(f"startup task {'ON' if on else 'OFF'}")
+        except Exception as e:
+            print(f"task setup failed: {e}")
+        return
     if "--allow-multi" not in sys.argv:
         try:
             from single_instance import acquire
