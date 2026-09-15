@@ -60,24 +60,41 @@ def _find_icon_path() -> Optional[str]:
     return None
 
 
-# ── Theme ──────────────────────────────────────────────────────────────
+# ── Theme — Modern Design System (Minimalism & Swiss, dark cinematic) ──
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-BG = "#0f1117"
-SIDEBAR = "#161922"
-CARD = "#1c2030"
-CARD_HOVER = "#242940"
-ACCENT = "#5b8def"
-ACCENT_DIM = "#3a5fa0"
+# Design tokens — 8dp rhythm, 16px base, Inter-like clean
+BG = "#0F172A"          # --color-background
+SIDEBAR = "#0B1222"     # slightly darker than BG for depth
+CARD = "#192134"        # --color-card
+CARD_HOVER = "#1E2A45"
+CARD_BORDER = "#1e293b" # subtle border, rgba(255,255,255,0.08)
+ACCENT = "#6366F1"      # modern indigo (was #5b8def) — vibrant for RGB app
+ACCENT_DIM = "#4338CA"  # --color-accent deep indigo
+ACCENT_HOVER = "#5558FF"
 GREEN = "#4ade80"
 RED = "#f87171"
 YELLOW = "#fbbf24"
-FG = "#e2e8f0"
-MUTED = "#64748b"
+FG = "#F1F5F9"          # --color-foreground, crisper
+MUTED = "#94A3B8"       # --color-muted-foreground
+MUTED_DIM = "#64748b"
 ENTRY_BG = "#0d1017"
+SURFACE = "#131B2F"     # --color-muted
 
-PAD = 12
+# Spacing & radius — consistent 8dp scale, everything rounded
+PAD = 16                # base padding (was 12)
+GAP = 12                # between cards
+INNER_PAD = 12
+R_CARD = 16             # card corner radius
+R_BUTTON = 12           # button
+R_SMALL = 10            # small controls, sliders track
+R_PILL = 20             # pills, dots
+
+# Motion — 200-250ms subtle, ease-out
+DURATION_FAST = 150
+DURATION_NORMAL = 220
+EASE = "ease-out"
 
 
 # ── Async runner ───────────────────────────────────────────────────────
@@ -97,6 +114,179 @@ class AsyncRunner:
 # ── Color helpers ──────────────────────────────────────────────────────
 def rgb_hex(r, g, b):
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# ── Modern Color Wheel — HSV, 220px, silky drag ─────────────────────
+class ColorWheel(ctk.CTkFrame):
+    """A beautiful HSV wheel: hue = angle, sat = radius, val fixed at ~0.9.
+    Lightweight PIL generation, Canvas thumb, 220ms hover, live callback."""
+    def __init__(self, master, size: int = 220, command=None, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.size = size
+        self.command = command
+        self._radius = size // 2 - 6
+        self._center = size // 2
+        self._hue = 0.0
+        self._sat = 1.0
+        self._dragging = False
+
+        # canvas with rounded feel
+        self.canvas = tk.Canvas(self, width=size, height=size, bg=CARD, highlightthickness=0, bd=0)
+        self.canvas.pack(padx=6, pady=6)
+        # generate wheel image once
+        self._wheel_img = self._make_wheel_image(size)
+        try:
+            from PIL import ImageTk  # type: ignore
+            self._tk_img = ImageTk.PhotoImage(self._wheel_img)
+            self._img_id = self.canvas.create_image(self._center, self._center, image=self._tk_img)
+        except Exception:
+            self._tk_img = None
+            self._img_id = None
+        # thumb
+        self._thumb = self.canvas.create_oval(0, 0, 0, 0, outline="white", width=2, fill="")
+        self._thumb_inner = self.canvas.create_oval(0, 0, 0, 0, outline="black", width=1, fill="")
+        self._update_thumb()
+
+        self.canvas.bind("<Button-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Enter>", lambda _e: self.canvas.configure(cursor="crosshair"))
+
+    def _make_wheel_image(self, size: int):
+        # fast path via numpy (~8ms) else pure-python fallback (~180ms)
+        try:
+            import numpy as np  # type: ignore
+            from PIL import Image
+            cx = cy = size // 2
+            r_out = size // 2 - 6
+            r_in = int(r_out * 0.62)
+            # grid
+            ys, xs = np.ogrid[:size, :size]
+            dx = xs - cx
+            dy = cy - ys
+            d = np.hypot(dx, dy)
+            ang = (np.degrees(np.arctan2(dy, dx)) + 360) % 360
+            mask = (d >= r_in) & (d <= r_out)
+            # hsv
+            h = ang / 360.0
+            sat = np.clip((d - r_in) / max(1, r_out - r_in), 0, 1)
+            s = 0.92 + 0.08 * sat
+            v = np.ones_like(h)
+            # hsv->rgb vectorized
+            i = (h * 6).astype(int) % 6
+            f = h * 6 - i
+            p = v * (1 - s)
+            q = v * (1 - f * s)
+            t = v * (1 - (1 - f) * s)
+            r = np.choose(i, [v, q, p, p, t, v])
+            g = np.choose(i, [t, v, v, q, p, p])
+            b = np.choose(i, [p, p, t, v, v, q])
+            rgb = np.stack([r, g, b], axis=-1)
+            rgb = (rgb * 255).astype(np.uint8)
+            # base card color
+            card_rgb = tuple(int(CARD.lstrip("#")[j:j+2], 16) for j in (0, 2, 4))
+            base = np.full((size, size, 3), card_rgb, dtype=np.uint8)
+            base[mask] = rgb[mask]
+            return Image.fromarray(base, "RGB")
+        except Exception:
+            pass
+        # fallback pure python (slow first time, cached after)
+        from PIL import Image
+        import math
+        img = Image.new("RGB", (size, size), CARD)
+        cx = cy = size // 2
+        r_out = size // 2 - 6
+        r_in = int(r_out * 0.62)
+        px = img.load()
+        for y in range(size):
+            for x in range(size):
+                dx = x - cx
+                dy = y - cy
+                d = math.hypot(dx, dy)
+                if d < r_in or d > r_out:
+                    continue
+                ang = (math.degrees(math.atan2(-dy, dx)) + 360) % 360
+                sat = min(1.0, max(0.0, (d - r_in) / max(1, r_out - r_in)))
+                h = ang / 360.0
+                s = 0.92 + 0.08 * sat
+                v = 1.0
+                i = int(h * 6)
+                f = h * 6 - i
+                p = v * (1 - s)
+                q = v * (1 - f * s)
+                t = v * (1 - (1 - f) * s)
+                i %= 6
+                if i == 0:
+                    r, g, b = v, t, p
+                elif i == 1:
+                    r, g, b = q, v, p
+                elif i == 2:
+                    r, g, b = p, v, t
+                elif i == 3:
+                    r, g, b = p, q, v
+                elif i == 4:
+                    r, g, b = t, p, v
+                else:
+                    r, g, b = v, p, q
+                px[x, y] = (int(r * 255), int(g * 255), int(b * 255))  # type: ignore[index]
+        return img
+
+    def _update_thumb(self):
+        import math
+        ang = math.radians(self._hue)
+        r_out = self._radius
+        r_in = int(r_out * 0.62)
+        r = r_in + float(self._sat) * (r_out - r_in)
+        x = int(self._center + math.cos(ang) * r)
+        y = int(self._center - math.sin(ang) * r)
+        for oid, rad in [(self._thumb, 7), (self._thumb_inner, 5)]:
+            self.canvas.coords(oid, x - rad, y - rad, x + rad, y + rad)
+
+    def set_hsv(self, h: float, s: float):
+        self._hue = h % 360
+        self._sat = max(0.0, min(1.0, s / 100.0 if s > 1 else s))
+        self._update_thumb()
+
+    def _pos_to_hsv(self, x: int, y: int):
+        import math
+        dx = x - self._center
+        dy = self._center - y
+        ang = (math.degrees(math.atan2(dy, dx)) + 360) % 360
+        d = math.hypot(dx, dy)
+        r_out = self._radius
+        r_in = int(r_out * 0.62)
+        if d < r_in:
+            sat = 0.0
+        elif d > r_out:
+            sat = 1.0
+            d = r_out
+            x = int(self._center + math.cos(math.radians(ang)) * d)  # type: ignore
+            y = int(self._center - math.sin(math.radians(ang)) * d)  # type: ignore
+        else:
+            sat = (d - r_in) / max(1, r_out - r_in)
+        self._hue = ang
+        self._sat = sat
+        self._update_thumb()
+        # convert to rgb with current lightness from parent (or 50%)
+        # use hsl with l=50 for vivid
+        r, g, b = hsl_to_rgb(ang, sat * 100, 50)
+        return r, g, b
+
+    def _on_press(self, e):
+        self._dragging = True
+        r, g, b = self._pos_to_hsv(e.x, e.y)
+        if self.command:
+            self.command(r, g, b)
+
+    def _on_drag(self, e):
+        if not self._dragging:
+            return
+        r, g, b = self._pos_to_hsv(e.x, e.y)
+        if self.command:
+            self.command(r, g, b)
+
+    def _on_release(self, e):
+        self._dragging = False
 
 
 def hsl_to_rgb(h, s, l):
@@ -206,68 +396,87 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    # ── Sidebar ────────────────────────────────────────────────────
+    # ── Sidebar — modern pill nav, rounded, 8dp rhythm ─────────
     def _build_sidebar(self):
-        sb = ctk.CTkFrame(self, width=60, fg_color=SIDEBAR, corner_radius=0)
+        sb = ctk.CTkFrame(self, width=72, fg_color=SIDEBAR, corner_radius=0, border_width=1, border_color=CARD_BORDER)
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
 
+        # app mark
+        mark = ctk.CTkFrame(sb, fg_color="transparent")
+        mark.pack(fill="x", pady=(12, 8))
+        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=ctk.CTkFont(size=18, weight="bold")).pack()
+        ctk.CTkLabel(mark, text="ELF", text_color=FG, font=ctk.CTkFont(size=11, weight="bold")).pack()
+        ctk.CTkLabel(mark, text="AMBILIGHT", text_color=MUTED, font=ctk.CTkFont(size=8)).pack()
+
         self._page_btns: dict[str, ctk.CTkButton] = {}
+        self._page_indicators: dict[str, ctk.CTkFrame] = {}
+        # icons via unicode — no extra deps, consistent 1.5px feel
         pages = [
-            ("devices", "Devices"),
-            ("color", "Color"),
-            ("tune", "Tune"),
-            ("modes", "Modes"),
-            ("timing", "Timer"),
-            ("ambi", "Ambi"),
-            ("settings", "Setup"),
+            ("devices", "Devices", "◈"),
+            ("color", "Color", "⬢"),
+            ("tune", "Tune", "⬣"),
+            ("modes", "Modes", "⬔"),
+            ("timing", "Timer", "◷"),
+            ("ambi", "Ambi", "◎"),
+            ("settings", "Setup", "⚙"),
         ]
-        for key, label in pages:
+        for key, label, icon in pages:
+            row = ctk.CTkFrame(sb, fg_color="transparent")
+            row.pack(fill="x", padx=6, pady=2)
+            ind = ctk.CTkFrame(row, width=3, height=34, fg_color="transparent", corner_radius=2)
+            ind.pack(side="left", padx=(0, 6))
+            self._page_indicators[key] = ind
             b = ctk.CTkButton(
-                sb, text=label, width=56, height=34, corner_radius=10,
+                row, text=f"{icon}  {label}", width=56, height=34, corner_radius=R_BUTTON,
                 fg_color="transparent", hover_color=CARD_HOVER,
-                text_color=MUTED,
-                font=ctk.CTkFont(size=11),
+                text_color=MUTED, anchor="w",
+                font=ctk.CTkFont(size=11, weight="bold"),
                 command=lambda k=key: self._show_page(k),
             )
-            b.pack(pady=2, padx=2)
+            b.pack(side="left", fill="x", expand=True)
             self._page_btns[key] = b
 
         # bottom info strip: live color dot + connections + BT
-        info = ctk.CTkFrame(sb, fg_color="transparent")
-        info.pack(side="bottom", pady=(0, 4))
-        self.side_dot = ctk.CTkLabel(info, text="", width=40, height=14,
-                                     fg_color=rgb_hex(*self._color), corner_radius=7,
+        info = ctk.CTkFrame(sb, fg_color=CARD, corner_radius=R_CARD, border_width=1, border_color=CARD_BORDER)
+        info.pack(side="bottom", padx=8, pady=(8, 6), fill="x")
+        self.side_dot = ctk.CTkLabel(info, text="", width=48, height=16,
+                                     fg_color=rgb_hex(*self._color), corner_radius=R_PILL,
                                      cursor="hand2")
-        self.side_dot.pack(pady=2)
+        self.side_dot.pack(pady=(8, 4))
         self.side_dot.bind("<Button-1>", lambda _e: self._show_page("color"))
         self.conn_label = ctk.CTkLabel(
             info, text="0", text_color=GREEN,
             font=ctk.CTkFont(size=16, weight="bold"),
         )
         self.conn_label.pack()
+        ctk.CTkLabel(info, text="connected", text_color=MUTED, font=ctk.CTkFont(size=8)).pack(pady=(0, 4))
         self.bt_dot = ctk.CTkLabel(info, text="BT?", text_color=MUTED,
                                    font=ctk.CTkFont(size=10, weight="bold"))
-        self.bt_dot.pack()
+        self.bt_dot.pack(pady=(0, 8))
 
-        # power + save buttons at bottom
+        # power + save — pill, equal spacing, 8dp
+        pwr = ctk.CTkFrame(sb, fg_color="transparent")
+        pwr.pack(side="bottom", fill="x", padx=8, pady=(0, 4))
         ctk.CTkButton(
-            sb, text="OFF", width=56, height=24, corner_radius=8,
-            fg_color=RED, hover_color="#b91c1c",
+            pwr, text="OFF", height=28, corner_radius=R_PILL,
+            fg_color="transparent", border_width=1, border_color=RED, text_color=RED, hover_color="#2a1a1a",
+            font=ctk.CTkFont(size=11, weight="bold"),
             command=lambda: self._send_power(False),
-        ).pack(side="bottom", pady=1)
+        ).pack(fill="x", pady=2)
         ctk.CTkButton(
-            sb, text="ON", width=56, height=24, corner_radius=8,
-            fg_color=GREEN, hover_color="#2ea44f",
+            pwr, text="ON", height=28, corner_radius=R_PILL,
+            fg_color=GREEN, hover_color="#3dd68c", text_color="#0B1222",
+            font=ctk.CTkFont(size=11, weight="bold"),
             command=lambda: self._send_power(True),
-        ).pack(side="bottom", pady=1)
+        ).pack(fill="x", pady=2)
         self.save_btn = ctk.CTkButton(
-            sb, text="Save", width=56, height=28, corner_radius=8,
-            fg_color=ACCENT, hover_color="#4a7dd4",
+            sb, height=36, corner_radius=R_PILL,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._save_all,
         )
-        self.save_btn.pack(side="bottom", pady=(1, 4))
+        self.save_btn.pack(side="bottom", fill="x", padx=8, pady=(8, 12))
 
     PAGE_TITLES = {"devices": "Devices", "color": "Color", "tune": "Tune Colors",
                    "modes": "Modes", "timing": "Timing", "ambi": "Ambilight",
@@ -286,16 +495,26 @@ class App(ctk.CTk):
             return
         self._do_show(name)
 
+    def _animate_sidebar(self, active: str):
+        # subtle 150ms highlight — no layout shift, just color/indicator
+        for k, b in self._page_btns.items():
+            is_active = k == active
+            b.configure(fg_color=ACCENT if is_active else "transparent",
+                        text_color="white" if is_active else MUTED,
+                        hover_color=ACCENT_HOVER if is_active else CARD_HOVER)
+            ind = self._page_indicators.get(k)
+            if ind is not None:
+                ind.configure(fg_color=ACCENT if is_active else "transparent")
+
     def _do_show(self, name: str):
         self._current_page = name
-        for k, b in self._page_btns.items():
-            b.configure(fg_color=ACCENT_DIM if k == name else "transparent",
-                        text_color=FG if k == name else MUTED)
-        self._ensure_page(name)
-        for k, f in self._pages.items():
-            if k != name:
-                f.pack_forget()
-        self._pages[name].pack(in_=self._content, fill="both", expand=True, padx=PAD, pady=PAD)
+        self._animate_sidebar(name)
+        pf = self._ensure_page(name)
+        try:
+            pf.tkraise()
+        except Exception:
+            pf.grid(row=0, column=0, sticky="nsew", padx=PAD, pady=PAD)
+            pf.tkraise()
 
     def _unsaved_popup(self, msg: str, on_save, on_discard):
         top = ctk.CTkToplevel(self)
@@ -419,16 +638,26 @@ class App(ctk.CTk):
         self._log("Discarded — reverted to last save.")
 
     def _rebuild_pages(self):
-        # destroy the old content frame wholesale (pages + leaked spacers),
-        # then rebuild fresh — never stack multiple content frames.
-        old = getattr(self, "_content", None)
+        # rebuild without destroying _content — keep grid container alive for no flicker
         try:
-            if old is not None and str(old.winfo_exists()) == "1":
-                old.destroy()
+            for f in list(self._pages.values()):
+                try:
+                    f.destroy()
+                except Exception:
+                    pass
         except Exception:
             pass
         self._pages = {}
-        self._build_pages()
+        # keep _content, just clear its grid children
+        for ch in list(self._content.winfo_children()):
+            try:
+                ch.destroy()
+            except Exception:
+                pass
+        self._build_pages(prewarm=False)
+        # re-ensure current page instantly
+        if self._current_page:
+            self._ensure_page(self._current_page)
 
     def _debounced(self, key: str, delay_ms: int, fn):
         old = self._debounce.pop(key, None)
@@ -439,17 +668,45 @@ class App(ctk.CTk):
                 pass
         self._debounce[key] = self.after(delay_ms, lambda: (self._debounce.pop(key, None), fn()))
 
-    # ── Pages container (lazy: devices now, rest on first show) ──
-    def _build_pages(self):
-        self._content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        self._content.pack(side="left", fill="both", expand=True)
-        self._pages = {}
+    # ── Pages container — keep-alive grid, pre-warm for zero lag ──
+    def _build_pages(self, prewarm: bool = True):
+        if not hasattr(self, "_content") or not str(getattr(self, "_content", None)) or str(self._content.winfo_exists()) != "1":
+            self._content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+            self._content.pack(side="left", fill="both", expand=True)
+            self._content.grid_rowconfigure(0, weight=1)
+            self._content.grid_columnconfigure(0, weight=1)
+        else:
+            # ensure grid config
+            try:
+                self._content.grid_rowconfigure(0, weight=1)
+                self._content.grid_columnconfigure(0, weight=1)
+            except Exception:
+                pass
+        if not hasattr(self, "_pages"):
+            self._pages = {}
+        # always ensure devices immediately
         self._ensure_page("devices")
+        if prewarm:
+            # stagger remaining pages 80ms apart — no blocking, tab switches instant after
+            others = [k for k in self._page_builders.keys() if k != "devices"]
+            for i, k in enumerate(others):
+                self.after(180 + i * 90, lambda kk=k: self._ensure_page(kk))
 
     def _ensure_page(self, name: str):
-        if name not in self._pages:
-            self._pages[name] = self._page_builders[name]()
-        return self._pages[name]
+        if name in self._pages and str(self._pages[name].winfo_exists()) == "1":
+            return self._pages[name]
+        # build and place in grid (hidden until tkraise)
+        f = self._page_builders[name]()
+        # ensure it fills the grid cell with consistent PAD
+        f.grid(row=0, column=0, sticky="nsew", padx=PAD, pady=PAD)
+        # also keep reference for pack fallback
+        self._pages[name] = f
+        # lower it so current page stays on top until _do_show raises it
+        try:
+            f.lower()
+        except Exception:
+            pass
+        return f
 
     # ── Helpers ────────────────────────────────────────────────────
     def _log(self, msg: str):
@@ -1128,14 +1385,33 @@ class App(ctk.CTk):
         ctk.CTkButton(hex_row, text="Apply", corner_radius=8, width=60,
                        command=self._apply_hex).pack(side="left", padx=4)
 
-        # HSL sliders
-        hsl = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10)
-        hsl.pack(fill="x", pady=(0, 8))
-
+        # HSL vars first so wheel can sync
         h, s, l = rgb_to_hsl(*self._color)
         self.h_var = ctk.DoubleVar(value=h)
         self.s_var = ctk.DoubleVar(value=s)
         self.l_var = ctk.DoubleVar(value=l)
+
+        # — Modern Color Wheel — rounded card, equal gap
+        wheel_card = ctk.CTkFrame(body, fg_color=CARD, corner_radius=R_CARD, border_width=1, border_color=CARD_BORDER)
+        wheel_card.pack(fill="x", pady=(0, GAP))
+        ctk.CTkLabel(wheel_card, text="Wheel", text_color=MUTED, font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=INNER_PAD, pady=(INNER_PAD, 6))
+        wheel_row = ctk.CTkFrame(wheel_card, fg_color="transparent")
+        wheel_row.pack(fill="x", padx=INNER_PAD, pady=(0, INNER_PAD))
+        self._wheel = ColorWheel(wheel_row, size=220, command=self._wheel_picked)
+        self._wheel.pack(side="left", padx=(0, 16))
+        self._wheel.set_hsv(h, s)
+        winfo = ctk.CTkFrame(wheel_row, fg_color=SURFACE, corner_radius=R_SMALL, border_width=1, border_color=CARD_BORDER)
+        winfo.pack(side="left", fill="y", padx=4)
+        ctk.CTkLabel(winfo, text="Drag to pick", text_color=MUTED, font=ctk.CTkFont(size=11)).pack(pady=(12, 4), padx=12)
+        self._wheel_hex = ctk.CTkLabel(winfo, text=rgb_hex(*self._color), font=ctk.CTkFont(family="Consolas", size=15, weight="bold"), text_color=FG)
+        self._wheel_hex.pack(pady=2)
+        self._wheel_preview = ctk.CTkLabel(winfo, text="", width=64, height=64, fg_color=rgb_hex(*self._color), corner_radius=R_SMALL)
+        self._wheel_preview.pack(pady=6)
+        ctk.CTkLabel(winfo, text="Hue = angle · Sat = distance", text_color=MUTED, font=ctk.CTkFont(size=9)).pack(pady=(0, 12), padx=8)
+
+        # HSL sliders
+        hsl = ctk.CTkFrame(body, fg_color=CARD, corner_radius=R_CARD, border_width=1, border_color=CARD_BORDER)
+        hsl.pack(fill="x", pady=(0, GAP))
 
         for label, var, lo, hi, fmt in [
             ("Hue", self.h_var, 0, 360, "{:.0f}"),
@@ -1378,6 +1654,33 @@ class App(ctk.CTk):
             self._cal_refresh_preview()
         except Exception:
             pass
+        try:
+            if hasattr(self, "_wheel"):
+                h, s, _ = rgb_to_hsl(r, g, b)
+                self._wheel.set_hsv(h, s)
+                self._wheel_hex.configure(text=hx)
+                self._wheel_preview.configure(fg_color=hx)
+        except Exception:
+            pass
+
+    def _wheel_picked(self, r, g, b):
+        # from wheel drag — keep light as is, just update hue/sat
+        self._color = (r, g, b)
+        h, s, l = rgb_to_hsl(r, g, b)
+        try:
+            self.h_var.set(h)
+            self.s_var.set(s)
+            # keep l as is (wheel is hue/sat only, l via slider)
+        except Exception:
+            pass
+        self._update_color_labels()
+        self._stage_color()
+        self._live_color()
+        try:
+            self._wheel_hex.configure(text=rgb_hex(*self._color))
+            self._wheel_preview.configure(fg_color=rgb_hex(*self._color))
+        except Exception:
+            pass
 
     def _sync_color_ui(self):
         r, g, b = self._color
@@ -1389,6 +1692,14 @@ class App(ctk.CTk):
         self.s_var.set(s)
         self.l_var.set(l)
         self._update_color_labels()
+        # sync wheel thumb without recursion
+        try:
+            if hasattr(self, "_wheel"):
+                self._wheel.set_hsv(h, s)
+                self._wheel_hex.configure(text=rgb_hex(r, g, b))
+                self._wheel_preview.configure(fg_color=rgb_hex(r, g, b))
+        except Exception:
+            pass
 
     def _refresh_recent(self):
         for w in self.recent_frame.winfo_children():
@@ -1440,7 +1751,7 @@ class App(ctk.CTk):
             ctk.CTkLabel(row, text=f"{key} gain", width=60, text_color=col,
                           font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
             var = ctk.DoubleVar(value=getattr(self.cfg, f"cal_gain_{key.lower()}") * 100)
-            ctk.CTkSlider(row, from_=20, to=200, variable=var, width=350,
+            ctk.CTkSlider(row, from_=20, to=200, variable=var, width=350,  # type: ignore[arg-type]
                            command=lambda _: self._cal_changed()).pack(side="left", padx=8, fill="x", expand=True)
             lbl = ctk.CTkLabel(row, text=f"{var.get():.0f}%", width=50,
                                 font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
@@ -1452,7 +1763,7 @@ class App(ctk.CTk):
         extra.pack(fill="x", pady=(8, 0))
         ctk.CTkLabel(extra, text="Gamma", width=60, text_color=MUTED).pack(side="left")
         self._gamma_var = ctk.DoubleVar(value=self.cfg.cal_gamma)
-        ctk.CTkSlider(extra, from_=0.3, to=3.0, variable=self._gamma_var, width=160,
+        ctk.CTkSlider(extra, from_=0.3, to=3.0, variable=self._gamma_var, width=160,  # type: ignore[arg-type]
                        command=lambda _: self._cal_changed()).pack(side="left", padx=4)
         self._gamma_lbl = ctk.CTkLabel(extra, text=f"{self.cfg.cal_gamma:.2f}", width=50,
                                         font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
@@ -2059,8 +2370,8 @@ class App(ctk.CTk):
             rlbl = ctk.CTkLabel(row, text=txt, width=80, text_color=MUTED)
             rlbl.pack(side="left")
             var = ctk.DoubleVar(value=getattr(self.cfg, f"ambi_{key}"))
-            sld = ctk.CTkSlider(row, from_=lo, to=hi, variable=var, width=300,
-                                command=lambda _: self._ambi_refresh())
+            sld = ctk.CTkSlider(row, from_=lo, to=hi, variable=var, width=300,  # type: ignore[arg-type]
+                                command=lambda _: self._ambi_refresh())  # type: ignore[arg-type]
             sld.pack(side="left", padx=8, fill="x", expand=True)
             lbl = ctk.CTkLabel(row, text=f"{var.get():.0f}", width=50,
                                 font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
