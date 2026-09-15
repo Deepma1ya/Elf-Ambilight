@@ -163,7 +163,9 @@ class ColorWheel(ctk.CTkFrame):
         except Exception:
             self._tk_img = None
             self._img_id = None
-        self._thumb = self.canvas.create_oval(0, 0, 0, 0, outline="white", width=2, fill="")
+        # halo beneath the thumb simulates LED glow (canvas has no blur)
+        self._thumb_halo = self.canvas.create_oval(0, 0, 0, 0, outline="#ffffff", width=4, fill="")
+        self._thumb = self.canvas.create_oval(0, 0, 0, 0, outline="white", width=2, fill="#ffffff")
         self._thumb_inner = self.canvas.create_oval(0, 0, 0, 0, outline="black", width=1, fill="")
         self._update_thumb()
         self.canvas.bind("<Button-1>", self._on_press)
@@ -258,8 +260,13 @@ class ColorWheel(ctk.CTkFrame):
         r = r_in + float(self._sat) * (r_out - r_in)
         x = int(self._center + math.cos(ang) * r)
         y = int(self._center - math.sin(ang) * r)
+        pr, pg, pb = hsl_to_rgb(self._hue % 360, float(self._sat) * 100, 55)
+        glow = rgb_hex(pr, pg, pb)
+        self.canvas.coords(self._thumb_halo, x - 12, y - 12, x + 12, y + 12)
+        self.canvas.itemconfig(self._thumb_halo, outline=glow)
         for oid, rad in [(self._thumb, 7), (self._thumb_inner, 5)]:
             self.canvas.coords(oid, x - rad, y - rad, x + rad, y + rad)
+        self.canvas.itemconfig(self._thumb, fill=glow)
 
     def set_hsv(self, h: float, s: float):
         self._hue = h % 360
@@ -306,6 +313,74 @@ class ColorWheel(ctk.CTkFrame):
 
     def _on_release(self, e):
         self._dragging = False
+
+
+CARD_RGB = tuple(int(CARD.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _mix(c1, c2, t: float):
+    """Blend two rgb triples. Powers the fake LED glow (tkinter has no blur)."""
+    return tuple(max(0, min(255, int(a + (b - a) * t))) for a, b in zip(c1, c2))
+
+
+# ── Live monitor glow — ambilight demo card ────────────────────────
+class MonitorGlow(ctk.CTkFrame):
+    """Monitor mockup with wall wash in the live color. set_color() redraws
+    only on change (called from the throttled ambi tick)."""
+    def __init__(self, master, height: int = 132, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self._h = height
+        self.canvas = tk.Canvas(self, height=height, bg=CARD,
+                                highlightthickness=0, bd=0)
+        self.canvas.pack(fill="x")
+        self._cur = None
+
+    def set_color(self, r: int, g: int, b: int):
+        try:
+            w = int(self.canvas.winfo_width())
+        except Exception:
+            w = 0
+        if w < 120:
+            w = 600 if (self._cur is None or self._cur[3] < 120) else self._cur[3]
+        key = (r, g, b, w // 4)  # quantize width: no redraw jitter on resize
+        if key == self._cur:
+            return
+        self._cur = key
+        try:
+            self._render(r, g, b, w)
+        except Exception:
+            pass
+
+    def _render(self, r: int, g: int, b: int, w: int):
+        c = self.canvas
+        h = self._h
+        c.delete("all")
+        c.configure(width=w)
+        live = (r, g, b)
+        cx = w // 2
+        # wall wash: layered ovals fading live color -> CARD
+        for i in range(12, 0, -1):
+            f = (1.0 - i / 12.0) ** 1.5 * 0.85
+            col = rgb_hex(*_mix(CARD_RGB, live, f))
+            rx = 150 - i * 7 + w * 0.06
+            ry = 66 - i * 3
+            if rx < 10 or ry < 6:
+                continue
+            c.create_oval(cx - rx, h // 2 - ry, cx + rx, h // 2 + ry,
+                          outline=col, width=9)
+        # monitor body
+        mw = min(300, w - 90)
+        mx0, mx1 = cx - mw // 2, cx + mw // 2
+        my0, my1 = 22, h - 34
+        c.create_rectangle(mx0, my0, mx1, my1, fill="#0B1122",
+                           outline="#2b3a55", width=1)
+        # screen wash (content glow)
+        wash = rgb_hex(*_mix((5, 7, 13), live, 0.38))
+        c.create_rectangle(mx0 + 5, my0 + 5, mx1 - 5, my1 - 5,
+                           fill=wash, outline="")
+        # stand
+        c.create_rectangle(cx - 5, my1, cx + 5, h - 12, fill="#0B1122", outline="")
+        c.create_rectangle(cx - 42, h - 14, cx + 42, h - 8, fill="#0B1122", outline="")
 
 
 def hsl_to_rgb(h, s, l):
@@ -2529,8 +2604,15 @@ class App(ctk.CTk):
                                            fg_color="#000000", corner_radius=8)
         self._ambi_preview.pack(side="left", padx=12)
         self._ambi_stat = ctk.CTkLabel(row, text="idle",
-                                        font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
+                                         font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
         self._ambi_stat.pack(side="left", padx=8)
+
+        prev = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
+        prev.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(prev, text="Live preview", text_color=MUTED,
+                     font=F(F_CAPTION)).pack(anchor="w", padx=12, pady=(8, 0))
+        self._ambi_glow = MonitorGlow(prev)
+        self._ambi_glow.pack(fill="x", padx=12, pady=(0, 10))
 
         mrow = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         mrow.pack(fill="x", pady=(0, 8))
@@ -2871,6 +2953,12 @@ class App(ctk.CTk):
         if getattr(self, "_ambi_prev_hex", None) != hx:
             self._ambi_preview.configure(fg_color=hx)
             self._ambi_prev_hex = hx
+            try:
+                glow = getattr(self, "_ambi_glow", None)
+                if glow is not None:
+                    glow.set_color(r, g, b)
+            except Exception:
+                pass
         try:
             cache = getattr(self, "_ambi_cand_hex", None)
             if cache is None:
