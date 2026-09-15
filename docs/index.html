@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Elf-Ambilight — BLE LED control + screen-sync Ambilight for Windows</title>
+<meta name="description" content="Modern Windows controller for BLE LED strips: colors, effects, schedules and real-time Ambilight screen-sync. Single EXE, no install.">
+<style>
+  :root{
+    --bg:#0F172A; --card:#192134; --border:#1e293b; --accent:#6366F1;
+    --accent-hover:#5558FF; --green:#4ade80; --fg:#F1F5F9; --muted:#94A3B8;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;line-height:1.6}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+  header{padding:72px 0 40px;text-align:center}
+  .orb{width:120px;height:120px;margin:0 auto 28px;border-radius:50%;
+    background:conic-gradient(from 0deg,#f43f5e,#f59e0b,#4ade80,#38bdf8,#6366F1,#f43f5e);
+    filter:blur(2px) saturate(1.2);animation:spin 9s linear infinite;
+    box-shadow:0 0 60px 8px rgba(99,102,241,.55),0 0 140px 30px rgba(244,63,94,.25)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.orb{animation:none}}
+  h1{font-size:44px;letter-spacing:.5px}
+  h1 span{color:var(--accent)}
+  .tag{color:var(--muted);font-size:18px;margin:12px 0 28px}
+  .btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;
+    font-weight:700;font-size:17px;padding:14px 38px;border-radius:999px}
+  .btn:hover{background:var(--accent-hover)}
+  .ghost{display:inline-block;color:var(--muted);text-decoration:none;margin-left:18px;font-size:15px}
+  .ghost:hover{color:var(--fg)}
+  .meta{margin-top:16px;color:var(--muted);font-size:13px}
+  section{padding:36px 0}
+  h2{font-size:24px;margin-bottom:18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px}
+  .card h3{font-size:16px;margin-bottom:8px;color:#fff}
+  .card p{font-size:14px;color:var(--muted)}
+  .steps{list-style:none;counter-reset:s}
+  .steps li{background:var(--card);border:1px solid var(--border);border-radius:16px;
+    padding:16px 20px 16px 64px;margin-bottom:12px;position:relative;font-size:15px;color:var(--muted)}
+  .steps li b{color:var(--fg)}
+  .steps li::before{counter-increment:s;content:counter(s);position:absolute;left:20px;top:16px;
+    width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;
+    font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center}
+  code{background:#0B1120;border:1px solid var(--border);border-radius:8px;
+    padding:2px 8px;font-size:13px;color:var(--green)}
+  footer{border-top:1px solid var(--border);padding:28px 0 48px;color:var(--muted);
+    font-size:13px;text-align:center}
+  footer a{color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="orb" role="img" aria-label="Ambient light glow"></div>
+    <h1>Elf<span>-Ambilight</span></h1>
+    <p class="tag">Modern Windows control for BLE LED strips — colors, effects,
+      schedules, and real-time screen-sync Ambilight.</p>
+    <a class="btn" href="https://github.com/Deepma1ya/Elf-Ambilight/releases/latest">Download for Windows</a>
+    <a class="ghost" href="https://github.com/Deepma1ya/Elf-Ambilight">Source on GitHub</a>
+    <p class="meta">Single <code>Elf-Ambilight.exe</code> · no install · Windows 10/11 + Bluetooth LE</p>
+  </header>
+
+  <section>
+    <h2>Features</h2>
+    <div class="grid">
+      <div class="card"><h3>Devices</h3><p>BLE scan and connect, named groups, auto-connect and auto-reconnect on startup.</p></div>
+      <div class="card"><h3>Colors</h3><p>HSV wheel, HSL + RGB sliders, hex input, presets, recents, live-send while dragging.</p></div>
+      <div class="card"><h3>Tune</h3><p>Per-channel sliders, gain, gamma, temperature and matrix calibration with live preview.</p></div>
+      <div class="card"><h3>Modes</h3><p>29 built-in strip effects with brightness and speed control.</p></div>
+      <div class="card"><h3>Ambilight</h3><p>Screen-sync lighting with exact-duration crossfade, sampling presets and idle eco mode — engineered to stay imperceptible to Windows.</p></div>
+      <div class="card"><h3>Timer</h3><p>On-board strip timers plus PC-side schedules for power, color and mode.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Get started</h2>
+    <ol class="steps">
+      <li><b>Download</b> <code>Elf-Ambilight.exe</code> from the <b>releases page</b> and double-click it.</li>
+      <li>On the <b>Devices</b> page, <b>scan</b> and connect your strip (<code>ELK-*</code>, <code>LED LIGHT STRIP</code>, <code>XSL-*</code>, <code>CLK-*</code>).</li>
+      <li>Pick colors, tune calibration, or hit <b>Start Ambilight</b> and watch the room follow the screen.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>For developers</h2>
+    <div class="grid">
+      <div class="card"><h3>Protocol</h3><p>Service <code>0000fff0</code>, char <code>0000fff3</code>, 9-byte <code>7E…EF</code> packets with ELK auto-encrypt — all in <code>protocol.py</code>.</p></div>
+      <div class="card"><h3>Build</h3><p><code>pip install -r requirements.txt</code>, then <code>python app.py</code> or <code>build_exe.bat</code> for the EXE.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Elf-Ambilight · <a href="https://github.com/Deepma1ya/Elf-Ambilight">GitHub</a> ·
+    <a href="https://github.com/Deepma1ya/Elf-Ambilight/releases/latest">Releases</a>
+  </footer>
+
+</div>
+</body>
+</html>
