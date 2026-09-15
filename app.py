@@ -68,13 +68,13 @@ APP_VERSION = "1.1.0"
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# Design tokens — 8dp rhythm, 16px base, Inter-like clean
-BG = "#0F172A"          # --color-background
-SIDEBAR = "#0B1222"     # slightly darker than BG for depth
-CARD = "#192134"        # --color-card
-CARD_HOVER = "#1E2A45"
-CARD_BORDER = "#1e293b" # subtle border, rgba(255,255,255,0.08)
-ACCENT = "#6366F1"      # modern indigo (was #5b8def) — vibrant for RGB app
+# Design tokens — deep navy/charcoal cinematic dark, neon indigo accent
+BG = "#0B0F19"          # --color-background, deep navy (not pure black)
+SIDEBAR = "#070B14"     # darker than BG for depth
+CARD = "#141B2E"        # --color-card, frosted layer above BG
+CARD_HOVER = "#1B2440"
+CARD_BORDER = "#26314d" # crisper edge so cards lift off the background
+ACCENT = "#6366F1"      # neon indigo — vibrant for RGB app
 ACCENT_DIM = "#4338CA"  # --color-accent deep indigo
 ACCENT_HOVER = "#5558FF"
 GREEN = "#4ade80"
@@ -83,11 +83,11 @@ YELLOW = "#fbbf24"
 FG = "#F1F5F9"          # --color-foreground, crisper
 MUTED = "#94A3B8"       # --color-muted-foreground
 MUTED_DIM = "#64748b"
-ENTRY_BG = "#0d1017"
-SURFACE = "#131B2F"     # --color-muted
-SIDEBAR_BG = "#111B2F"  # --color-sidebar
-SIDEBAR_BTN = "#1a2744" # --color-sidebar-button
-SIDEBAR_BTN_HOVER = "#243656"
+ENTRY_BG = "#070A12"
+SURFACE = "#0F1626"     # --color-muted
+SIDEBAR_BG = "#0D1322"  # --color-sidebar
+SIDEBAR_BTN = "#161E33" # --color-sidebar-button
+SIDEBAR_BTN_HOVER = "#1F2A45"
 
 # Spacing & radius — consistent 8dp scale, everything rounded
 PAD = 16                # base padding (was 12)
@@ -315,74 +315,6 @@ class ColorWheel(ctk.CTkFrame):
         self._dragging = False
 
 
-CARD_RGB = tuple(int(CARD.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def _mix(c1, c2, t: float):
-    """Blend two rgb triples. Powers the fake LED glow (tkinter has no blur)."""
-    return tuple(max(0, min(255, int(a + (b - a) * t))) for a, b in zip(c1, c2))
-
-
-# ── Live monitor glow — ambilight demo card ────────────────────────
-class MonitorGlow(ctk.CTkFrame):
-    """Monitor mockup with wall wash in the live color. set_color() redraws
-    only on change (called from the throttled ambi tick)."""
-    def __init__(self, master, height: int = 132, **kwargs):
-        super().__init__(master, fg_color="transparent", **kwargs)
-        self._h = height
-        self.canvas = tk.Canvas(self, height=height, bg=CARD,
-                                highlightthickness=0, bd=0)
-        self.canvas.pack(fill="x")
-        self._cur = None
-
-    def set_color(self, r: int, g: int, b: int):
-        try:
-            w = int(self.canvas.winfo_width())
-        except Exception:
-            w = 0
-        if w < 120:
-            w = 600 if (self._cur is None or self._cur[3] < 120) else self._cur[3]
-        key = (r, g, b, w // 4)  # quantize width: no redraw jitter on resize
-        if key == self._cur:
-            return
-        self._cur = key
-        try:
-            self._render(r, g, b, w)
-        except Exception:
-            pass
-
-    def _render(self, r: int, g: int, b: int, w: int):
-        c = self.canvas
-        h = self._h
-        c.delete("all")
-        c.configure(width=w)
-        live = (r, g, b)
-        cx = w // 2
-        # wall wash: layered ovals fading live color -> CARD
-        for i in range(12, 0, -1):
-            f = (1.0 - i / 12.0) ** 1.5 * 0.85
-            col = rgb_hex(*_mix(CARD_RGB, live, f))
-            rx = 150 - i * 7 + w * 0.06
-            ry = 66 - i * 3
-            if rx < 10 or ry < 6:
-                continue
-            c.create_oval(cx - rx, h // 2 - ry, cx + rx, h // 2 + ry,
-                          outline=col, width=9)
-        # monitor body
-        mw = min(300, w - 90)
-        mx0, mx1 = cx - mw // 2, cx + mw // 2
-        my0, my1 = 22, h - 34
-        c.create_rectangle(mx0, my0, mx1, my1, fill="#0B1122",
-                           outline="#2b3a55", width=1)
-        # screen wash (content glow)
-        wash = rgb_hex(*_mix((5, 7, 13), live, 0.38))
-        c.create_rectangle(mx0 + 5, my0 + 5, mx1 - 5, my1 - 5,
-                           fill=wash, outline="")
-        # stand
-        c.create_rectangle(cx - 5, my1, cx + 5, h - 12, fill="#0B1122", outline="")
-        c.create_rectangle(cx - 42, h - 14, cx + 42, h - 8, fill="#0B1122", outline="")
-
-
 def hsl_to_rgb(h, s, l):
     r, g, b = colorsys.hls_to_rgb(h / 360.0, l / 100.0, s / 100.0)
     return int(r * 255), int(g * 255), int(b * 255)
@@ -523,7 +455,7 @@ class App(ctk.CTk):
 
     # ── Sidebar — high-contrast, readable nav ─────────────────
     def _build_sidebar(self):
-        # lighter sidebar for better contrast with white text (was #0B1222 too dark)
+        # deep sidebar, solid buttons so text always pops on dark
         sb = ctk.CTkFrame(self, width=92, fg_color=SIDEBAR_BG, corner_radius=0, border_width=1, border_color=CARD_BORDER)
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
@@ -593,7 +525,7 @@ class App(ctk.CTk):
         ).pack(fill="x", pady=2)
         ctk.CTkButton(
             pwr, text="ON", height=28, corner_radius=R_PILL,
-            fg_color=GREEN, hover_color="#3dd68c", text_color="#0B1222",
+            fg_color=GREEN, hover_color="#3dd68c", text_color="#071018",
             font=ctk.CTkFont(size=11, weight="bold"),
             command=lambda: self._send_power(True),
         ).pack(fill="x", pady=2)
@@ -1665,7 +1597,8 @@ class App(ctk.CTk):
         ctk.CTkLabel(body, text="Color", font=ctk.CTkFont(size=20, weight="bold"),
                       text_color=FG).pack(anchor="w", pady=(0, 8))
 
-        top = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10)
+        top = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10,
+                           border_width=1, border_color=ACCENT_DIM)
         top.pack(fill="x", pady=(0, 8))
 
         # Color preview
@@ -2607,13 +2540,6 @@ class App(ctk.CTk):
                                          font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
         self._ambi_stat.pack(side="left", padx=8)
 
-        prev = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
-        prev.pack(fill="x", pady=(0, 8))
-        ctk.CTkLabel(prev, text="Live preview", text_color=MUTED,
-                     font=F(F_CAPTION)).pack(anchor="w", padx=12, pady=(8, 0))
-        self._ambi_glow = MonitorGlow(prev)
-        self._ambi_glow.pack(fill="x", padx=12, pady=(0, 10))
-
         mrow = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         mrow.pack(fill="x", pady=(0, 8))
         ctk.CTkLabel(mrow, text="Capture area", text_color=MUTED).pack(side="left", padx=(0, 6))
@@ -2953,12 +2879,6 @@ class App(ctk.CTk):
         if getattr(self, "_ambi_prev_hex", None) != hx:
             self._ambi_preview.configure(fg_color=hx)
             self._ambi_prev_hex = hx
-            try:
-                glow = getattr(self, "_ambi_glow", None)
-                if glow is not None:
-                    glow.set_color(r, g, b)
-            except Exception:
-                pass
         try:
             cache = getattr(self, "_ambi_cand_hex", None)
             if cache is None:
