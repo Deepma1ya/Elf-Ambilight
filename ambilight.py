@@ -1,13 +1,15 @@
 """Screen-capture -> sampled color -> crossfaded realtime BLE packets (Ambilight).
 
-Performance design (minimal GPU/CPU, same functionality):
-- One mss/dxcam instance per thread, reused (no re-enumeration).
-- Low-res capture ~57×32 (32px tall, was 89×50) — 1.8k pixels vs 4.5k, ~60% less work, still vibrant.
-- One Python pass over thumbnail for all modes; ~0.6ms analyze.
-- Crossfaded eased position, throttled BLE (min_delta + interval).
-- Aggressive eco: 2s still → 2Hz polling (was 1s→4Hz) — almost idle when static.
+Performance design (imperceptible: sampling decoupled from fading):
+- Screen is sampled at ~5Hz in a low-priority background thread (2Hz eco
+  when still) — a 19-42ms GDI/DXGI grab 5x/sec instead of 20-60x/sec is
+  what keeps Windows feeling perfectly smooth.
+- Fading/interpolation runs capture-free at FPS rate (cheap lerp + tiny
+  BLE packet only while the colour is actually moving; near-zero when idle).
+- One mss/dxcam instance reused (no re-enumeration); dxcam duplication
+  runs at the sample rate, not the fade rate.
+- Low-res ~57×32 thumbnails (1.8k px), C-speed ImageStat averaging.
 - Privacy: downscaled immediately, never saved.
-- GPU: dxcam Desktop Duplication only when fps≥30 and use_dxcam=True; mss fallback never flickers.
 """
 from __future__ import annotations
 import asyncio
@@ -22,20 +24,23 @@ class Ambilight:
     def __init__(self, ble, get_targets, fps: float = 30.0, smooth: float = 0.35,
                  min_delta: int = 6, brightness: int = 100,
                  capture_mode: str = "center", update_interval: float = 0.1,
-                 crossfade: bool = True, use_dxcam: bool = True):
+                 crossfade: bool = True, use_dxcam: bool = True,
+                 sample_hz: float = 5.0):
         """
         ble: ElfBLE instance
         get_targets: callable() -> list[str] (connected MACs to drive)
-        fps: capture loop rate, 1..60
+        fps: fade/render rate, 1..60 (capture-free lerp — cheap, can be high)
         smooth: crossfade DURATION in seconds, 0.0..10.0 (0 = instant,
                 2.0 = gradual 2-second fade at FPS rate). Kept name for compat.
         min_delta: skip send if r/g/b each changed less than this (direct mode)
         brightness: 0..100 scale applied to captured color
-        capture_mode: 'center' or 'full' — both 60fps capable via low-res 50px + dxcam
+        capture_mode: 'center' or 'full'
         update_interval: min seconds between strip updates — DIRECT mode only.
-                         Ignored when crossfade is on (screen is sampled every
-                         frame and the strip fades continuously).
+                         Ignored when crossfade is on.
         crossfade: True = time-based gradual fade, False = instant jump
+        sample_hz: screen sampling rate for the background sampler thread
+                   (default 5Hz, 2Hz eco when still). The expensive grab runs
+                   here — never in the fade loop — so Windows stays silky.
         """
         self.ble = ble
         self.get_targets = get_targets
@@ -48,6 +53,12 @@ class Ambilight:
         self.sample_mode = "average"  # average | dominant | vibrant | brightest
         self.update_interval = max(0.01, min(5.0, update_interval))
         self.crossfade = bool(crossfade)
+        self.sample_hz = max(1.0, min(15.0, sample_hz))
+        # latest sampled screen colour (written by sampler thread, read by loop)
+        self._sampled_target: tuple[int, int, int] = (0, 0, 0)
+        self._sampler_thread: threading.Thread | None = None
+        self._sampler_stop = threading.Event()
+        self._sampler_cam = None  # dxcam instance owned by the sampler thread
         self.use_dxcam = bool(use_dxcam)
         self.last_stats: dict[str, tuple[int, int, int]] = {}
         self._task: asyncio.Task | None = None
@@ -88,13 +99,34 @@ class Ambilight:
                 "Ambilight.start() called without a running event loop; "
                 "schedule it on the BLE loop thread instead")
         self._running = True
+        # fresh sampler state so the first fade converges immediately
+        self._dom_ema_init = False
+        self._sampled_target = tuple(self.last_color)  # type: ignore
+        self._still = 0
+        self._prev_thumb = None
+        self.eco = False
+        self._sampler_stop.clear()
+        th = self._sampler_thread
+        if th is None or not th.is_alive():
+            self._sampler_thread = threading.Thread(
+                target=self._sampler_run, name="ambi-sampler", daemon=True)
+            self._sampler_thread.start()
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self):
         self._running = False
-        # stop dxcam capture if active
+        self._sampler_stop.set()
+        th = self._sampler_thread
+        if th is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, th.join, 3.0)
+            except Exception:
+                pass
+            self._sampler_thread = None
+        # sampler thread stops its own dxcam on exit; defensive stop here too
         try:
-            cam = getattr(self._tls, "dxcam", None)
+            cam = self._sampler_cam
             if cam is not None:
                 try:
                     cam.stop()
@@ -102,6 +134,7 @@ class Ambilight:
                     pass
         except Exception:
             pass
+        self._sampler_cam = None
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=3.0)
@@ -112,6 +145,75 @@ class Ambilight:
     @property
     def running(self) -> bool:
         return self._running and self._task is not None and not self._task.done()
+
+    # ---- background sampler (the only place that touches the screen) ----
+    def _sampler_run(self):
+        """Low-rate screen sampling on a background thread.
+
+        A 19-42ms grab at 5Hz (~100-200ms of CPU per second, bursty) is
+        invisible; the same grab at 20-60Hz in the fade loop (~40% of a
+        core + compositor stalls) is what made Windows feel laggy.
+        """
+        try:  # keep the sampler out of the way of games / the compositor
+            import ctypes
+            ctypes.windll.kernel32.SetThreadPriority(
+                ctypes.windll.kernel32.GetCurrentThread(), -2)  # LOWEST
+        except Exception:
+            pass
+        still_needed = max(1, int(round(self.sample_hz * 2.0)))  # 2s still → eco
+        while not self._sampler_stop.is_set():
+            t0 = time.monotonic()
+            try:
+                self._sample_once(still_needed)
+            except Exception:
+                pass
+            # eco: still screen → 2Hz; moving screen → sample_hz
+            interval = 0.50 if self._still > still_needed else 1.0 / max(1.0, self.sample_hz)
+            dt = time.monotonic() - t0
+            self._sampler_stop.wait(max(0.0, interval - dt))
+        # release Desktop Duplication promptly so no GPU/compositor state lingers
+        try:
+            cam = self._sampler_cam
+            if cam is not None:
+                try:
+                    cam.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _sample_once(self, still_needed: int):
+        """One capture → analyze → EMA → publish. Sampler thread only."""
+        t0 = time.perf_counter()
+        stats = self._grab_stats()
+        self.last_capture_ms = (time.perf_counter() - t0) * 1000.0
+        # still-screen detection (exact thumbnail match)
+        if self._thumb_bytes == self._prev_thumb and self._prev_thumb:
+            self._still += 1
+        else:
+            self._still = 0
+            self._prev_thumb = self._thumb_bytes
+        self.eco = self._still > still_needed
+        # --- temporal target lock (prevents flicker on mixed screens) ---
+        raw_c = stats.get(self.sample_mode, stats["average"])
+        raw = (float(raw_c[0]), float(raw_c[1]), float(raw_c[2]))
+        ts = 0.25  # EMA factor (lower = more stable)
+        if not self._dom_ema_init:
+            self._dom_ema = raw
+            self._dom_target = raw
+            self._dom_ema_init = True
+        else:
+            self._dom_ema = (
+                self._dom_ema[0] + (raw[0] - self._dom_ema[0]) * ts,
+                self._dom_ema[1] + (raw[1] - self._dom_ema[1]) * ts,
+                self._dom_ema[2] + (raw[2] - self._dom_ema[2]) * ts,
+            )
+            diff = max(abs(self._dom_ema[i] - self._dom_target[i]) for i in range(3))
+            if diff > 3.0:
+                self._dom_target = self._dom_ema
+        self._sampled_target = (int(self._dom_target[0]),
+                                int(self._dom_target[1]),
+                                int(self._dom_target[2]))
 
     # ---- capture ----
     def _thread_sct(self):
@@ -124,15 +226,16 @@ class Ambilight:
         return sct
 
     def _thread_dxcam(self, box):
-        """Per-thread dxcam for high-FPS full-screen (Desktop Duplication, ~12 ms).
-        Reuses the singleton, restarts with new region/fps when needed."""
+        """Sampler-thread dxcam (Desktop Duplication). Duplication runs at the
+        *sample* rate (5Hz), not the fade rate — far less GPU/compositor load,
+        yet the fades stay silky because interpolation needs no captures."""
         try:
             import dxcam  # type: ignore
         except Exception:
             return None
         region = (int(box["left"]), int(box["top"]),
                   int(box["left"] + box["width"]), int(box["top"] + box["height"]))
-        target_fps = int(max(30, min(60, self.fps)))
+        target_fps = int(max(5, min(15, self.sample_hz)))
         cam = getattr(self._tls, "dxcam", None)
         prev_region = getattr(self._tls, "dxcam_region", None)
         prev_fps = getattr(self._tls, "dxcam_fps", None)
@@ -161,6 +264,7 @@ class Ambilight:
                     pass
         except Exception:
             return None
+        self._sampler_cam = cam
         return cam
 
     def _capture_box(self, sct):
@@ -206,20 +310,18 @@ class Ambilight:
         resample = getattr(Image, "Resampling", Image).BILINEAR
         small = img.resize((target_w, target_h), resample) if (w, h) != (target_w, target_h) else img
         self._thumb_bytes = small.tobytes()
-        px = list(small.getdata())
-        n = max(1, len(px))
 
-        # fast path: average-only (most common, cheapest) — skip histogram
+        # fast path: average-only (most common) — C-speed ImageStat, no
+        # Python per-pixel loop, no histogram. ~0.06ms vs ~0.36ms.
         if self.sample_mode == "average":
-            sr = sg = sb = 0
-            for (r, g, b) in px:
-                sr += r
-                sg += g
-                sb += b
-            avg = (sr // n, sg // n, sb // n)
-            # still need thumb for eco, but vibrant/brightest/dominant not needed — return avg for all to keep preview working
+            from PIL import ImageStat
+            m = ImageStat.Stat(small).mean
+            avg = (int(m[0]), int(m[1]), int(m[2]))
+            # thumb already stored for eco; fill all keys for the preview
             return {"average": avg, "dominant": avg, "vibrant": avg, "brightest": avg}
 
+        px = list(small.getdata())
+        n = max(1, len(px))
         sr = sg = sb = 0
         hist: dict[int, list] = {}  # key -> [count, sum_r, sum_g, sum_b]
         vib_s = -1
@@ -316,8 +418,10 @@ class Ambilight:
         t0 = time.perf_counter()
         sct = self._thread_sct()
         box = self._capture_box(sct)
-        # GPU path: dxcam Desktop Duplication (~12-16 ms full 1440p) vs mss ~50 ms full, ~25 ms center
-        # dxcam uses almost 0% CPU (GPU) and is much faster; mss never flickers but is CPU-heavy
+        # GPU path: dxcam Desktop Duplication; single resize straight to the
+        # thumbnail size (no intermediate 50px step). mss fallback never
+        # flickers (SRCCOPY without CAPTUREBLT) but costs a GDI readback —
+        # which is exactly why sampling runs at 5Hz in the background.
         if self.use_dxcam:
             try:
                 cam = self._thread_dxcam(box)
@@ -326,7 +430,7 @@ class Ambilight:
                     if frame is not None:
                         bh = max(1, int(box["height"]))
                         bw = max(1, int(box["width"]))
-                        th = 50
+                        th = 32
                         tw = max(1, round(bw * th / max(1, bh)))
                         h, w = frame.shape[:2]
                         img_full = Image.frombytes("RGB", (w, h), frame.tobytes(), "raw", "BGRX")
@@ -334,16 +438,14 @@ class Ambilight:
                         img = img_full.resize((tw, th), resample)
                         stats = self._analyze_small(img)
                         self.last_stats = stats
-                        self.last_capture_ms = (time.perf_counter() - t0) * 1000.0
                         return stats
             except Exception:
                 pass
-        # fallback: mss at native res then downscale in _analyze_small (no cursor flicker — SRCCOPY without CAPTUREBLT)
+        # fallback: mss at native res then downscale in _analyze_small
         shot = sct.grab(box)
         img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         stats = self._analyze_small(img)
         self.last_stats = stats
-        self.last_capture_ms = (time.perf_counter() - t0) * 1000.0
         return stats
 
     def capture_average(self) -> tuple[int, int, int]:
@@ -360,9 +462,11 @@ class Ambilight:
         return (int(r * k), int(g * k), int(b * k))
 
     async def _loop(self):
+        """Capture-free fade loop. Reads the sampler's latest colour, walks
+        the strip toward it, sends on change. No grabs, no resizes, no
+        executor hops — a few microseconds per frame, so Windows never
+        feels it. When idle (eco + fade settled) it naps at 4Hz."""
         period = 1.0 / max(1.0, min(60.0, self.fps))
-        still_needed = max(1, int(round(self.fps * 2.0)))  # 2s still → eco, was 1s
-        loop = asyncio.get_running_loop()
         self._shown = [float(c) for c in self.last_color]
         # smooth crossfade state
         if not hasattr(self, "_last_sent"):
@@ -374,35 +478,9 @@ class Ambilight:
         while self._running:
             t0 = time.monotonic()
             try:
-                r, g, b = await loop.run_in_executor(None, self.capture_selected)
                 self.frames += 1
-                # still-screen detection (exact thumbnail match)
-                if self._thumb_bytes == self._prev_thumb and self._prev_thumb:
-                    self._still += 1
-                else:
-                    self._still = 0
-                    self._prev_thumb = self._thumb_bytes
-
-                # --- temporal target lock ---
-                raw = (float(r), float(g), float(b))
-                ts = 0.25  # EMA factor (lower = more stable)
-                if not self._dom_ema_init:
-                    self._dom_ema = raw
-                    self._dom_ema_init = True
-                else:
-                    self._dom_ema = (
-                        self._dom_ema[0] + (raw[0] - self._dom_ema[0]) * ts,
-                        self._dom_ema[1] + (raw[1] - self._dom_ema[1]) * ts,
-                        self._dom_ema[2] + (raw[2] - self._dom_ema[2]) * ts,
-                    )
-                diff = max(abs(self._dom_ema[i] - self._dom_target[i]) for i in range(3))
-                if diff > 3.0:
-                    self._dom_target = self._dom_ema
-
-                sr, sg, sb = self._apply_brightness(
-                    int(self._dom_target[0]),
-                    int(self._dom_target[1]),
-                    int(self._dom_target[2]))
+                st = self._sampled_target
+                sr, sg, sb = self._apply_brightness(st[0], st[1], st[2])
                 if self.calibrate is not None:
                     try:
                         sr, sg, sb = self.calibrate(sr, sg, sb)
@@ -476,10 +554,16 @@ class Ambilight:
             except Exception:
                 await asyncio.sleep(0.25)
             dt = time.monotonic() - t0
-            if self._still > still_needed:
-                self.eco = True
-                await asyncio.sleep(max(0.0, 0.50 - dt))  # 2Hz eco was 4Hz (0.25) — half the wakeups
+            # idle nap: eco still-screen + fade settled + nothing new to send
+            # → 4Hz instead of full FPS. Wakes instantly: any new sample
+            # restarts the fade and the next frame sends again.
+            try:
+                settled = (self.last_color == self._fade_target
+                           and self.last_color == self._last_sent)
+            except Exception:
+                settled = False
+            if self.eco and settled:
+                await asyncio.sleep(max(0.0, 0.25 - dt))
             else:
-                self.eco = False
                 await asyncio.sleep(max(0.0, period - dt))
         self._running = False

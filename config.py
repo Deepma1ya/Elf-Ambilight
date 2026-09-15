@@ -96,7 +96,7 @@ class Config:
     schedules: list[dict] = field(default_factory=list)
 
     # ambilight — tuned for minimal GPU/CPU, same functionality
-    ambi_fps: float = 20.0  # was 30 — 33% fewer captures, still smooth with crossfade
+    ambi_fps: float = 30.0  # fade/render rate — capture-free, so 30Hz is cheap and silky
     ambi_smooth: float = 2.0  # crossfade DURATION in seconds, 0.0=instant .. 10.0=ultra-slow
     ambi_brightness: int = 100
     ambi_min_delta: int = 8  # was 6 — fewer BLE writes for tiny changes

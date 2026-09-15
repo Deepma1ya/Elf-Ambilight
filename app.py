@@ -336,6 +336,15 @@ class App(ctk.CTk):
         self.minsize(800, 550)
         self.configure(fg_color=BG)
         self._apply_window_icon()
+        try:  # stay out of the way: below-normal priority so captures/fades
+            import ctypes  # can never starve games, video or the compositor
+            ctypes.windll.kernel32.SetPriorityClass(
+                ctypes.windll.kernel32.GetCurrentProcess(), 0x4000)  # BELOW_NORMAL
+            ctypes.windll.winmm.timeBeginPeriod(1)  # 1ms timer resolution:
+            # asyncio.sleep(0.033) actually sleeps ~33ms instead of ~46ms,
+            # so 30/60fps fades are truly smooth instead of visibly steppy.
+        except Exception:
+            pass
 
         self.runner = AsyncRunner()
         self.ble = ElfBLE()
@@ -353,8 +362,15 @@ class App(ctk.CTk):
         self._tray = None
         self.found: dict[str, FoundDevice] = {}
         self.ambilight = Ambilight(self.ble, self._ambi_targets,
-                                   crossfade=True,
+                                   fps=self.cfg.ambi_fps,
+                                   smooth=self.cfg.ambi_smooth,
+                                   min_delta=self.cfg.ambi_min_delta,
+                                   brightness=self.cfg.ambi_brightness,
+                                   capture_mode=self.cfg.ambi_mode,
+                                   update_interval=self.cfg.ambi_interval,
+                                   crossfade=self.cfg.ambi_crossfade,
                                    use_dxcam=self.cfg.ambi_use_dxcam)
+        self.ambilight.sample_mode = self.cfg.ambi_sample
         self.ambilight.calibrate = self.cfg.cal_apply
         self._color = (self.cfg.last_r, self.cfg.last_g, self.cfg.last_b)
 
@@ -2369,7 +2385,7 @@ class App(ctk.CTk):
         self._ambi_row_lbls: dict[str, ctk.CTkLabel] = {}
         self._ambi_rows: dict[str, ctk.CTkFrame] = {}
         for i, (txt, key, lo, hi) in enumerate([
-            ("FPS (1-60)", "fps", 1, 60),
+            ("Fade FPS (1-60)", "fps", 1, 60),
             ("Crossfade (s)", "smooth", 0.0, 10.0),
             ("Brightness", "brightness", 1, 100),
             ("Min Delta", "min_delta", 0, 30),
@@ -2582,11 +2598,23 @@ class App(ctk.CTk):
             self.ambi_btn.configure(text="Start Ambilight", fg_color=GREEN, hover_color="#2ea44f")
             return
         r, g, b = self.ambilight.last_color
-        self._ambi_preview.configure(fg_color=rgb_hex(r, g, b))
+        # only redraw widgets whose colour actually changed — configure()
+        # forces a full customtkinter redraw of the widget, and at 2Hz x5
+        # widgets that adds up to visible UI churn for zero benefit.
+        hx = rgb_hex(r, g, b)
+        if getattr(self, "_ambi_prev_hex", None) != hx:
+            self._ambi_preview.configure(fg_color=hx)
+            self._ambi_prev_hex = hx
         try:
+            cache = getattr(self, "_ambi_cand_hex", None)
+            if cache is None:
+                cache = self._ambi_cand_hex = {}
             for key, sw in self._cand_sw.items():
                 cr, cg, cb = self.ambilight.last_stats.get(key, (0, 0, 0))
-                sw.configure(fg_color=rgb_hex(cr, cg, cb))
+                chx = rgb_hex(cr, cg, cb)
+                if cache.get(key) != chx:
+                    sw.configure(fg_color=chx)
+                    cache[key] = chx
         except Exception:
             pass
         self.ambilight.fps = max(1.0, min(60.0, self._ambi_vars["fps"].get()))
@@ -2606,13 +2634,15 @@ class App(ctk.CTk):
             pass
         try:
             eco = " eco" if self.ambilight.eco else ""
-            self._ambi_stat.configure(
-                text=f"f={self.ambilight.frames} s={self.ambilight.sends} "
-                     f"cap={self.ambilight.last_capture_ms:.1f}ms{eco} rgb=({r},{g},{b})")
+            txt = (f"f={self.ambilight.frames} s={self.ambilight.sends} "
+                   f"cap={self.ambilight.last_capture_ms:.1f}ms{eco} rgb=({r},{g},{b})")
+            if getattr(self, "_ambi_stat_txt", None) != txt:
+                self._ambi_stat.configure(text=txt)
+                self._ambi_stat_txt = txt
         except Exception:
             pass
         self._ambi_refresh(save=False)
-        self.after(500, self._ambi_tick)
+        self.after(750, self._ambi_tick)
 
 
     # ════════════════════════════════════════════════════════════════
