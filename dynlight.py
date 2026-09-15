@@ -217,7 +217,8 @@ class DynLight:
                         names.append(i.name or "LampArray")
                 if not lamps and uniq:
                     err = (f"found {len(uniq)} lighting device(s) but all are busy — "
-                           "close G Hub / RGB apps holding exclusive control, then Refresh")
+                           "yield them first (G Hub: enable Windows Dynamic Lighting, "
+                           "or close RGB apps), then Refresh")
             except Exception as e:  # noqa: BLE001
                 err = f"{type(e).__name__}: {str(e)[:120]}"
         with self._lock:

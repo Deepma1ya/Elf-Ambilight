@@ -2824,7 +2824,10 @@ class App(ctk.CTk):
         drow.pack(fill="x", pady=(4, 0))
         ctk.CTkButton(drow, text="Refresh", corner_radius=8, width=80,
                        command=self._dynlight_refresh).pack(side="left", padx=2)
-        ctk.CTkLabel(drow, text="Takes over the same devices Windows Settings > Dynamic Lighting controls.",
+        ctk.CTkButton(drow, text="Lighting settings", corner_radius=8, width=120,
+                       fg_color="transparent", border_width=1,
+                       command=lambda: self._open_lighting_settings()).pack(side="left", padx=2)
+        ctk.CTkLabel(drow, text="One driver per device: yield lighting in vendor apps first (G Hub: enable Windows Dynamic Lighting).",
                      text_color=MUTED, font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
         self._dynlight_status_update()
 
@@ -2877,110 +2880,6 @@ class App(ctk.CTk):
             self.dynlight.enabled = on
             if on:
                 self.dynlight.request_refresh()
-                self._log("Dynamic Lighting mirror ON — scanning for PC lamps ...")
-                self.after(6000, self._dynlight_status_update)
-            else:
-                self._log("Dynamic Lighting mirror OFF.")
-            self._mark_dirty("settings")
-            self._dynlight_status_update()
-        except Exception as e:
-            self._log(f"Dynamic Lighting: {e}")
-
-    def _dynlight_refresh(self):
-        try:
-            self.dynlight.request_refresh()
-            self._log("Dynamic Lighting: rescanning ...")
-            self.after(6000, self._dynlight_status_update)
-            self._dynlight_status_update()
-        except Exception as e:
-            self._log(f"Dynamic Lighting: {e}")
-
-    def _dynlight_status_update(self):
-        try:
-            from dynlight import winrt_available
-            if not winrt_available():
-                self.dynlight_status_lbl.configure(
-                    text="Dynamic Lighting: unavailable (WinRT LampArray API not installed)",
-                    text_color=MUTED)
-                return
-            s = self.dynlight.snapshot()
-            if s["lamps"] > 0:
-                devs = ", ".join(s["devices"][:4])
-                if len(s["devices"]) > 4:
-                    devs += f" +{len(s['devices']) - 4} more"
-                self.dynlight_status_lbl.configure(
-                    text=f"Dynamic Lighting: {s['lamps']} lamp(s) — {devs}",
-                    text_color=GREEN)
-            elif s["error"]:
-                self.dynlight_status_lbl.configure(
-                    text=f"Dynamic Lighting: {s['error']}", text_color=YELLOW)
-            else:
-                self.dynlight_status_lbl.configure(
-                    text="Dynamic Lighting: no PC lamps found (check Windows Settings > Dynamic Lighting)",
-                    text_color=MUTED)
-        except Exception:
-            pass
-
-    def _dynlight_toggled(self):
-        try:
-            on = bool(self._dynlight_var.get())
-            self.cfg.dynlight_enabled = on
-            self._save_keys({"dynlight_enabled": on})
-            self.dynlight.enabled = on
-            if on:
-                self.dynlight.request_refresh()
-                self._log("Dynamic Lighting mirror ON — scanning for PC lamps ...")
-                self.after(6000, self._dynlight_status_update)
-            else:
-                self._log("Dynamic Lighting mirror OFF.")
-            self._mark_dirty("settings")
-            self._dynlight_status_update()
-        except Exception as e:
-            self._log(f"Dynamic Lighting: {e}")
-
-    def _dynlight_refresh(self):
-        try:
-            self.dynlight.request_refresh()
-            self._log("Dynamic Lighting: rescanning ...")
-            self.after(6000, self._dynlight_status_update)
-            self._dynlight_status_update()
-        except Exception as e:
-            self._log(f"Dynamic Lighting: {e}")
-
-    def _dynlight_status_update(self):
-        try:
-            from dynlight import winrt_available
-            if not winrt_available():
-                self.dynlight_status_lbl.configure(
-                    text="Dynamic Lighting: unavailable (WinRT LampArray API not installed)",
-                    text_color=MUTED)
-                return
-            s = self.dynlight.snapshot()
-            if s["lamps"] > 0:
-                devs = ", ".join(s["devices"][:4])
-                if len(s["devices"]) > 4:
-                    devs += f" +{len(s['devices']) - 4} more"
-                self.dynlight_status_lbl.configure(
-                    text=f"Dynamic Lighting: {s['lamps']} lamp(s) — {devs}",
-                    text_color=GREEN)
-            elif s["error"]:
-                self.dynlight_status_lbl.configure(
-                    text=f"Dynamic Lighting: {s['error']}", text_color=YELLOW)
-            else:
-                self.dynlight_status_lbl.configure(
-                    text="Dynamic Lighting: no PC lamps found (check Windows Settings > Dynamic Lighting)",
-                    text_color=MUTED)
-        except Exception:
-            pass
-
-    def _dynlight_toggled(self):
-        try:
-            on = bool(self._dynlight_var.get())
-            self.cfg.dynlight_enabled = on
-            self._save_keys({"dynlight_enabled": on})
-            self.dynlight.enabled = on
-            if on:
-                self.dynlight.request_refresh()
                 self._log("Dynamic Lighting mirror ON.")
                 self.after(6000, self._dynlight_status_update)
             else:
@@ -2988,6 +2887,13 @@ class App(ctk.CTk):
             self._dynlight_status_update()
         except Exception as e:
             self._log(f"Dynamic Lighting: {e}")
+
+    def _open_lighting_settings(self):
+        try:
+            import os
+            os.startfile("ms-settings:personalization")
+        except Exception as e:
+            self._log(f"Lighting settings: {e}")
 
     def _dynlight_refresh(self):
         try:
