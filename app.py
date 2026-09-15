@@ -596,8 +596,7 @@ class App(ctk.CTk):
 
     def _refresh_save_btn(self):
         try:
-            n = len(self._dirty)
-            self.save_btn.configure(text=f"Save ({n})" if n else "Save")
+            self.save_btn.configure(text="Save")
         except Exception:
             pass
 
@@ -3000,8 +2999,8 @@ class App(ctk.CTk):
             self.dynlight.enabled = on
             if on:
                 self.dynlight.request_refresh()
-                self._log("Dynamic Lighting mirror ON.")
-                self.after(6000, self._dynlight_status_update)
+                self._log("Dynamic Lighting mirror ON (all busy? yield lighting in G Hub first, then Refresh).")
+                self.after(8000, self._dynlight_status_update)
             else:
                 self._log("Dynamic Lighting mirror OFF.")
             self._dynlight_status_update()
@@ -3018,7 +3017,7 @@ class App(ctk.CTk):
     def _dynlight_refresh(self):
         try:
             self.dynlight.request_refresh()
-            self._log("Dynamic Lighting: rescanning ...")
+            self._log("Dynamic Lighting: rescanning (if all busy, close vendor RGB apps first) ...")
             self.after(6000, self._dynlight_status_update)
             self._dynlight_status_update()
         except Exception as e:
