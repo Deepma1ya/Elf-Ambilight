@@ -2341,10 +2341,14 @@ class App(ctk.CTk):
             sw.pack()
             self._cand_sw[key] = sw
 
-        # Crossfade always on — slider controls speed
+        # Crossfade toggle — ON = gradual time-based fade, OFF = instant jump
         xf = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         xf.pack(fill="x", pady=(0, 8))
-        ctk.CTkLabel(xf, text="Crossfade: always on  \u00b7  left = instant  \u00b7  right = slow/smooth",
+        self._ambi_crossfade_var = ctk.BooleanVar(value=self.cfg.ambi_crossfade)
+        ctk.CTkSwitch(xf, text="Crossfade", variable=self._ambi_crossfade_var,
+                      progress_color=ACCENT, font=ctk.CTkFont(size=12, weight="bold"),
+                      command=self._ambi_crossfade_toggled).pack(side="left", padx=8)
+        ctk.CTkLabel(xf, text="ON = gradual fade over seconds  \u00b7  OFF = instant jump every interval",
                      text_color=MUTED, font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
 
         # GPU capture toggle — dxcam is fast but can cause cursor lag on < Win11 24H2
@@ -2363,12 +2367,13 @@ class App(ctk.CTk):
         self._ambi_lbls: dict[str, ctk.CTkLabel] = {}
         self._ambi_sliders: dict[str, ctk.CTkSlider] = {}
         self._ambi_row_lbls: dict[str, ctk.CTkLabel] = {}
+        self._ambi_rows: dict[str, ctk.CTkFrame] = {}
         for i, (txt, key, lo, hi) in enumerate([
             ("FPS (1-60)", "fps", 1, 60),
-            ("Crossfade", "smooth", 1.0, 0.01),
+            ("Crossfade (s)", "smooth", 0.0, 10.0),
             ("Brightness", "brightness", 1, 100),
             ("Min Delta", "min_delta", 0, 30),
-            ("Update / Fade (s)", "interval", 0.02, 2.0),
+            ("Update every (s)", "interval", 0.02, 2.0),
         ]):
             row = ctk.CTkFrame(grid, fg_color="transparent")
             row.pack(fill="x", pady=3)
@@ -2385,17 +2390,48 @@ class App(ctk.CTk):
             self._ambi_lbls[key] = lbl
             self._ambi_sliders[key] = sld
             self._ambi_row_lbls[key] = rlbl
-        # hint for Smoothing
-        ctk.CTkLabel(grid, text="Crossfade: left = instant  \u00b7  right = slow/smooth  \u00b7  try 0.02–0.35",
-                     text_color=MUTED, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=8, pady=(2, 0))
-        # crossfade always on — slider always enabled
+            self._ambi_rows[key] = row
+        # hint for crossfade duration
+        self._ambi_hint = ctk.CTkLabel(
+            grid, text="Crossfade: 0 = instant  \u00b7  2 = 2-second gradual fade at FPS rate",
+            text_color=MUTED, font=ctk.CTkFont(size=10))
+        self._ambi_hint.pack(anchor="w", padx=8, pady=(2, 0))
+        # show fade slider only when crossfade is on, interval only when off
+        self._ambi_sync_crossfade_ui()
+
+        return f
+
+    def _ambi_sync_crossfade_ui(self):
+        """Show Crossfade (s) slider when ON, Update interval when OFF."""
         try:
-            self._ambi_sliders["smooth"].configure(state="normal")
-            self._ambi_row_lbls["smooth"].configure(text_color=MUTED)
+            on = bool(self._ambi_crossfade_var.get())
+        except Exception:
+            on = True
+        try:
+            if on:
+                self._ambi_rows["interval"].pack_forget()
+                self._ambi_rows["smooth"].pack(fill="x", pady=3)
+                self._ambi_hint.configure(
+                    text="Crossfade: 0 = instant  \u00b7  2 = 2-second gradual fade at FPS rate")
+            else:
+                self._ambi_rows["smooth"].pack_forget()
+                self._ambi_rows["interval"].pack(fill="x", pady=3)
+                self._ambi_hint.configure(
+                    text="Direct: strip jumps to screen colour every interval (Min Delta filters noise)")
         except Exception:
             pass
 
-        return f
+    def _ambi_crossfade_toggled(self):
+        try:
+            on = bool(self._ambi_crossfade_var.get())
+            self.cfg.ambi_crossfade = on
+            self.ambilight.crossfade = on
+            self._ambi_sync_crossfade_ui()
+            self._mark_dirty("ambi")
+            self._log("Ambilight " + ("crossfade ON — gradual fade over seconds."
+                                      if on else "crossfade OFF — instant jump every interval."))
+        except Exception:
+            pass
 
     def _ambi_mode(self) -> str:
         try:
@@ -2404,13 +2440,13 @@ class App(ctk.CTk):
             return "center"
 
     AMBI_PRESETS = {
-        "Movie": {"fps": 30, "smooth": 0.10, "brightness": 80, "min_delta": 8,
+        "Movie": {"fps": 30, "smooth": 2.0, "brightness": 80, "min_delta": 8,
                   "interval": 0.80, "mode": "center", "sample": "average"},
-        "Game": {"fps": 60, "smooth": 0.50, "brightness": 100, "min_delta": 3,
+        "Game": {"fps": 60, "smooth": 0.4, "brightness": 100, "min_delta": 3,
                  "interval": 0.05, "mode": "center", "sample": "vibrant"},
-        "Chill": {"fps": 15, "smooth": 0.05, "brightness": 60, "min_delta": 10,
+        "Chill": {"fps": 15, "smooth": 3.0, "brightness": 60, "min_delta": 10,
                   "interval": 1.00, "mode": "center", "sample": "average"},
-        "Party": {"fps": 30, "smooth": 0.15, "brightness": 100, "min_delta": 2,
+        "Party": {"fps": 30, "smooth": 1.0, "brightness": 100, "min_delta": 2,
                   "interval": 0.30, "mode": "center", "sample": "brightest"},
     }
 
@@ -2450,17 +2486,25 @@ class App(ctk.CTk):
     def _ambi_refresh(self, save: bool = True):
         for k, lbl in self._ambi_lbls.items():
             v = self._ambi_vars[k].get()
-            lbl.configure(text=f"{v:.2f}s" if k == "interval" else f"{v:.0f}")
+            if k == "smooth":
+                lbl.configure(text=f"{v:.1f}s")
+            elif k == "interval":
+                lbl.configure(text=f"{v:.2f}s")
+            else:
+                lbl.configure(text=f"{v:.0f}")
         if save:
             self.cfg.ambi_fps = max(1.0, min(60.0, float(self._ambi_vars["fps"].get())))
-            self.cfg.ambi_smooth = float(self._ambi_vars["smooth"].get())
+            self.cfg.ambi_smooth = max(0.0, min(10.0, float(self._ambi_vars["smooth"].get())))
             self.cfg.ambi_brightness = int(self._ambi_vars["brightness"].get())
             self.cfg.ambi_min_delta = int(self._ambi_vars["min_delta"].get())
             self.cfg.ambi_mode = self._ambi_mode()
             self.cfg.ambi_sample = self._ambi_sample()
             self.cfg.ambi_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
-            self.cfg.ambi_crossfade = True
-            self.ambilight.crossfade = True
+            try:
+                self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
+                self.ambilight.crossfade = self.cfg.ambi_crossfade
+            except Exception:
+                pass
             try:
                 self.cfg.ambi_use_dxcam = bool(self._ambi_dxcam_var.get())
                 self.ambilight.use_dxcam = self.cfg.ambi_use_dxcam
@@ -2484,13 +2528,16 @@ class App(ctk.CTk):
             self._log("Missing deps: pip install mss pillow")
             return
         self.ambilight.fps = max(1.0, min(60.0, self._ambi_vars["fps"].get()))
-        self.ambilight.smooth = self._ambi_vars["smooth"].get()
+        self.ambilight.smooth = max(0.0, min(10.0, float(self._ambi_vars["smooth"].get())))
         self.ambilight.brightness = int(self._ambi_vars["brightness"].get())
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
-        self.ambilight.crossfade = True
+        try:
+            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
+        except Exception:
+            pass
         try:
             self.ambilight.use_dxcam = bool(self._ambi_dxcam_var.get())
         except Exception:
@@ -2543,13 +2590,16 @@ class App(ctk.CTk):
         except Exception:
             pass
         self.ambilight.fps = max(1.0, min(60.0, self._ambi_vars["fps"].get()))
-        self.ambilight.smooth = self._ambi_vars["smooth"].get()
+        self.ambilight.smooth = max(0.0, min(10.0, float(self._ambi_vars["smooth"].get())))
         self.ambilight.brightness = int(self._ambi_vars["brightness"].get())
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
-        self.ambilight.crossfade = True
+        try:
+            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
+        except Exception:
+            pass
         try:
             self.ambilight.use_dxcam = bool(self._ambi_dxcam_var.get())
         except Exception:

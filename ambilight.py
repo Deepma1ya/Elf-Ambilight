@@ -27,20 +27,21 @@ class Ambilight:
         ble: ElfBLE instance
         get_targets: callable() -> list[str] (connected MACs to drive)
         fps: capture loop rate, 1..60
-        smooth: 0..1 crossfade rate (LOWER = slower/smoother, 0.01 = ultra-slow silky)
-        min_delta: skip send if r/g/b each changed less than this
+        smooth: crossfade DURATION in seconds, 0.0..10.0 (0 = instant,
+                2.0 = gradual 2-second fade at FPS rate). Kept name for compat.
+        min_delta: skip send if r/g/b each changed less than this (direct mode)
         brightness: 0..100 scale applied to captured color
         capture_mode: 'center' or 'full' — both 60fps capable via low-res 50px + dxcam
-        update_interval: min seconds between strip updates (also fade duration
-                         when crossfade is on — new screen colour is sampled
-                         every interval, and the strip fades to it at FPS rate)
-        crossfade: True = smooth fade at FPS rate, False = instant jump
+        update_interval: min seconds between strip updates — DIRECT mode only.
+                         Ignored when crossfade is on (screen is sampled every
+                         frame and the strip fades continuously).
+        crossfade: True = time-based gradual fade, False = instant jump
         """
         self.ble = ble
         self.get_targets = get_targets
         self.calibrate: Optional[Callable[[int, int, int], tuple[int, int, int]]] = None
         self.fps = max(1.0, min(60.0, fps))
-        self.smooth = max(0.01, min(1.0, smooth))  # 0.01 = ultra-slow silky
+        self.smooth = max(0.0, min(10.0, smooth))  # fade duration in seconds
         self.min_delta = max(0, min_delta)
         self.brightness = max(1, min(100, brightness))
         self.capture_mode = capture_mode if capture_mode in ("center", "full") else "center"
@@ -66,8 +67,12 @@ class Ambilight:
         self._dom_target: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._dom_ema: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._dom_ema_init = False
-        # crossfade state: target only refreshes every update_interval
+        # crossfade state: time-based linear fade from _fade_start to
+        # _fade_target over `smooth` seconds. Restarted whenever the sampled
+        # screen colour moves; progress is purely (now - t0) / duration so
+        # the transition always takes the configured time at any FPS.
         self._fade_target: tuple[int, int, int] = (0, 0, 0)
+        self._fade_start: tuple[int, int, int] = (0, 0, 0)
         self._fade_t0: float = 0.0
 
     def start(self):
@@ -364,6 +369,7 @@ class Ambilight:
             self._last_sent: tuple[int, int, int] = tuple(self.last_color)  # type: ignore
         if self._fade_t0 == 0.0:
             self._fade_target = tuple(self.last_color)  # type: ignore
+            self._fade_start = tuple(self.last_color)  # type: ignore
             self._fade_t0 = time.monotonic()
         while self._running:
             t0 = time.monotonic()
@@ -406,24 +412,38 @@ class Ambilight:
                 now = time.monotonic()
 
                 if self.crossfade:
-                    # ── smooth: new target sampled every update_interval,
-                    #    strip fades to it at FPS rate (ease_step). Smoothing
-                    #    controls ease speed, interval controls fade window. ──
-                    if (now - self._fade_t0) >= self.update_interval:
-                        if (abs(sr - self._fade_target[0]) >= 2
-                                or abs(sg - self._fade_target[1]) >= 2
-                                or abs(sb - self._fade_target[2]) >= 2):
-                            self._fade_target = (sr, sg, sb)
-                            self._fade_t0 = now
-                    cur = self._ease_step(self._shown, self._fade_target, self.smooth)
+                    # ── time-based linear fade: sampled screen colour is the
+                    #    target every frame; the strip walks from fade-start
+                    #    to target over `smooth` seconds. Duration is exact
+                    #    and FPS-independent. Every 1-unit step is sent so
+                    #    the gradient is truly gradual (min_delta is direct-
+                    #    mode only — it would quantize the fade into jumps). ──
+                    if (abs(sr - self._fade_target[0]) >= 2
+                            or abs(sg - self._fade_target[1]) >= 2
+                            or abs(sb - self._fade_target[2]) >= 2):
+                        self._fade_start = (int(round(self._shown[0])),
+                                            int(round(self._shown[1])),
+                                            int(round(self._shown[2])))
+                        self._fade_target = (sr, sg, sb)
+                        self._fade_t0 = now
+                    dur = max(0.0, min(10.0, float(self.smooth)))
+                    if dur <= 0.03:
+                        cur = self._fade_target
+                    else:
+                        p = (now - self._fade_t0) / dur
+                        if p >= 1.0:
+                            cur = self._fade_target
+                        elif p <= 0.0:
+                            cur = self._fade_start
+                        else:
+                            fs = self._fade_start
+                            ft = self._fade_target
+                            cur = (int(round(fs[0] + (ft[0] - fs[0]) * p)),
+                                   int(round(fs[1] + (ft[1] - fs[1]) * p)),
+                                   int(round(fs[2] + (ft[2] - fs[2]) * p)))
+                    self._shown = [float(cur[0]), float(cur[1]), float(cur[2])]
                     self.last_color = cur
-                    lr, lg, lb = self._last_sent
-                    # send when accumulated change since last *sent* exceeds min_delta
-                    # (per-frame check would stall ultra-slow 0.01 where each step < min_delta)
-                    if (cur != (lr, lg, lb)
-                            and (abs(cur[0] - lr) >= self.min_delta
-                                 or abs(cur[1] - lg) >= self.min_delta
-                                 or abs(cur[2] - lb) >= self.min_delta)):
+                    if cur != self._last_sent:
                         targets = [a for a in self.get_targets() if self.ble.is_connected(a)]
                         if targets:
                             pkt = pkt_color_realtime(*cur)
