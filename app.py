@@ -376,6 +376,11 @@ class App(ctk.CTk):
         self.bind("<Control-s>", lambda _e: self._save_all())
         self.bind("<Control-S>", lambda _e: self._save_all())
 
+        # resize is the heaviest path in customtkinter (redraws every rounded frame)
+        # debounce it: freeze heavy work while dragging, update 120ms after last event
+        self._resize_after = None
+        self.bind("<Configure>", self._on_resize, add="+")
+
         if "--minimized" in sys.argv or "--tray" in sys.argv:
             self.withdraw()
         self._ensure_tray()
@@ -669,26 +674,37 @@ class App(ctk.CTk):
                 pass
         self._debounce[key] = self.after(delay_ms, lambda: (self._debounce.pop(key, None), fn()))
 
-    # ── Pages container — keep-alive grid, pre-warm for zero lag ──
+    def _on_resize(self, event):
+        # only care about the toplevel itself, not every child Configure
+        if event.widget is not self:
+            return
+        # debounce: while dragging, do nothing heavy; update after 120ms of idle
+        if self._resize_after is not None:
+            try:
+                self.after_cancel(self._resize_after)
+            except Exception:
+                pass
+        self._resize_after = self.after(120, self._finish_resize)
+
+    def _finish_resize(self):
+        self._resize_after = None
+        # one lightweight relayout — no rebuild, just ensure current page fills
+        try:
+            if self._current_page and self._current_page in self._pages:
+                pf = self._pages[self._current_page]
+                pf.grid_configure(padx=PAD, pady=PAD)
+        except Exception:
+            pass
+
+    # ── Pages container — keep-alive place, pre-warm for zero lag ──
     def _build_pages(self, prewarm: bool = True):
         if not hasattr(self, "_content") or not str(getattr(self, "_content", None)) or str(self._content.winfo_exists()) != "1":
             self._content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
             self._content.pack(side="left", fill="both", expand=True)
-            self._content.grid_rowconfigure(0, weight=1)
-            self._content.grid_columnconfigure(0, weight=1)
-        else:
-            # ensure grid config
-            try:
-                self._content.grid_rowconfigure(0, weight=1)
-                self._content.grid_columnconfigure(0, weight=1)
-            except Exception:
-                pass
         if not hasattr(self, "_pages"):
             self._pages = {}
-        # always ensure devices immediately
         self._ensure_page("devices")
         if prewarm:
-            # stagger remaining pages 80ms apart — no blocking, tab switches instant after
             others = [k for k in self._page_builders.keys() if k != "devices"]
             for i, k in enumerate(others):
                 self.after(180 + i * 90, lambda kk=k: self._ensure_page(kk))
@@ -696,13 +712,9 @@ class App(ctk.CTk):
     def _ensure_page(self, name: str):
         if name in self._pages and str(self._pages[name].winfo_exists()) == "1":
             return self._pages[name]
-        # build and place in grid (hidden until tkraise)
         f = self._page_builders[name]()
-        # ensure it fills the grid cell with consistent PAD
-        f.grid(row=0, column=0, sticky="nsew", padx=PAD, pady=PAD)
-        # also keep reference for pack fallback
+        f.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._pages[name] = f
-        # lower it so current page stays on top until _do_show raises it
         try:
             f.lower()
         except Exception:
