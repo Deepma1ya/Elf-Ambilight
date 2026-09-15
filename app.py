@@ -2953,9 +2953,11 @@ class App(ctk.CTk):
                          corner_radius=R_SMALL,
                          command=self._startup_toggled).pack(anchor="w", pady=2)
         self._task_var = ctk.BooleanVar(value=task_enabled())
-        ctk.CTkCheckBox(sc, text="High priority startup (elevated, before other startup apps)",
-                        variable=self._task_var, corner_radius=R_SMALL,
-                        command=self._task_toggled).pack(anchor="w", pady=2)
+        self._task_chk = ctk.CTkCheckBox(sc, text="High priority startup (elevated, before other startup apps)",
+                                        variable=self._task_var, corner_radius=R_SMALL,
+                                        command=self._task_toggled,
+                                        state="normal" if startup_enabled() else "disabled")
+        self._task_chk.pack(anchor="w", pady=2)
         _toggle(sc, "Start minimized to tray", self.cfg.start_minimized,
                 lambda on: (setattr(self.cfg, "start_minimized", on),
                             self._save_keys({"start_minimized": on}),
@@ -3112,12 +3114,37 @@ class App(ctk.CTk):
         except Exception as e:
             self._log(f"Startup task update: {e}")
 
+    def _sync_task_chk(self):
+        """High priority needs Start-with-Windows on — grey it out otherwise."""
+        try:
+            on = startup_enabled()
+            self._task_chk.configure(state="normal" if on else "disabled")
+            if not on and bool(self._task_var.get()):
+                try:
+                    set_task(False)
+                except Exception as e:
+                    self._log(f"High priority startup: {e}")
+                self._task_var.set(False)
+                self._log("High priority startup OFF (needs Start with Windows).")
+        except Exception:
+            pass
+
     def _task_toggled(self):
+        if not startup_enabled():
+            try:
+                self._task_var.set(False)
+            except Exception:
+                pass
+            messagebox.showinfo("High priority startup",
+                                "Turn on 'Start app with Windows' first.")
+            return
         try:
             set_task(bool(self._task_var.get()), minimized=self.cfg.start_minimized)
             self._log("High priority startup " + ("ON (elevated logon task)." if self._task_var.get() else "OFF."))
         except Exception as e:
             self._log(f"High priority startup: {e}")
+            messagebox.showwarning("High priority startup",
+                                   f"Could not enable:\n\n{e}")
             try:
                 self._task_var.set(task_enabled())
             except Exception:
@@ -3133,6 +3160,7 @@ class App(ctk.CTk):
                 self._startup_var.set(startup_enabled())
             except Exception:
                 pass
+        self._sync_task_chk()
 
     def _remembered_text(self):
         if not self.cfg.last_addresses:
