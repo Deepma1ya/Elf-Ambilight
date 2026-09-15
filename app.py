@@ -26,7 +26,7 @@ from bt_helper import (
     bt_service_running, try_enable_bluetooth, open_bluetooth_settings,
     looks_like_bt_off,
 )
-from startup_helper import startup_enabled, set_startup
+from startup_helper import startup_enabled, set_startup, task_enabled, set_task
 
 
 def _find_icon_path() -> Optional[str]:
@@ -2952,6 +2952,10 @@ class App(ctk.CTk):
         ctk.CTkCheckBox(sc, text="Start app with Windows", variable=self._startup_var,
                          corner_radius=R_SMALL,
                          command=self._startup_toggled).pack(anchor="w", pady=2)
+        self._task_var = ctk.BooleanVar(value=task_enabled())
+        ctk.CTkCheckBox(sc, text="High priority startup (elevated, before other startup apps)",
+                        variable=self._task_var, corner_radius=R_SMALL,
+                        command=self._task_toggled).pack(anchor="w", pady=2)
         _toggle(sc, "Start minimized to tray", self.cfg.start_minimized,
                 lambda on: (setattr(self.cfg, "start_minimized", on),
                             self._save_keys({"start_minimized": on}),
@@ -3102,6 +3106,22 @@ class App(ctk.CTk):
                 set_startup(True, minimized=self.cfg.start_minimized)
         except Exception as e:
             self._log(f"Startup update: {e}")
+        try:
+            if task_enabled():
+                set_task(True, minimized=self.cfg.start_minimized)
+        except Exception as e:
+            self._log(f"Startup task update: {e}")
+
+    def _task_toggled(self):
+        try:
+            set_task(bool(self._task_var.get()), minimized=self.cfg.start_minimized)
+            self._log("High priority startup " + ("ON (elevated logon task)." if self._task_var.get() else "OFF."))
+        except Exception as e:
+            self._log(f"High priority startup: {e}")
+            try:
+                self._task_var.set(task_enabled())
+            except Exception:
+                pass
 
     def _startup_toggled(self):
         try:
