@@ -396,22 +396,21 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    # ── Sidebar — modern pill nav, rounded, 8dp rhythm ─────────
+    # ── Sidebar — readable, modern pill nav ───────────────────
     def _build_sidebar(self):
-        sb = ctk.CTkFrame(self, width=72, fg_color=SIDEBAR, corner_radius=0, border_width=1, border_color=CARD_BORDER)
+        sb = ctk.CTkFrame(self, width=84, fg_color=SIDEBAR, corner_radius=0, border_width=1, border_color=CARD_BORDER)
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
 
-        # app mark
+        # app mark — larger, crisper
         mark = ctk.CTkFrame(sb, fg_color="transparent")
-        mark.pack(fill="x", pady=(12, 8))
-        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=ctk.CTkFont(size=18, weight="bold")).pack()
-        ctk.CTkLabel(mark, text="ELF", text_color=FG, font=ctk.CTkFont(size=11, weight="bold")).pack()
-        ctk.CTkLabel(mark, text="AMBILIGHT", text_color=MUTED, font=ctk.CTkFont(size=8)).pack()
+        mark.pack(fill="x", pady=(14, 10))
+        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=ctk.CTkFont(size=20, weight="bold")).pack()
+        ctk.CTkLabel(mark, text="ELF", text_color=FG, font=ctk.CTkFont(size=13, weight="bold")).pack()
+        ctk.CTkLabel(mark, text="AMBILIGHT", text_color="#CBD5E1", font=ctk.CTkFont(size=9, weight="bold")).pack()
 
         self._page_btns: dict[str, ctk.CTkButton] = {}
         self._page_indicators: dict[str, ctk.CTkFrame] = {}
-        # icons via unicode — no extra deps, consistent 1.5px feel
         pages = [
             ("devices", "Devices", "◈"),
             ("color", "Color", "⬢"),
@@ -423,15 +422,16 @@ class App(ctk.CTk):
         ]
         for key, label, icon in pages:
             row = ctk.CTkFrame(sb, fg_color="transparent")
-            row.pack(fill="x", padx=6, pady=2)
-            ind = ctk.CTkFrame(row, width=3, height=34, fg_color="transparent", corner_radius=2)
-            ind.pack(side="left", padx=(0, 6))
+            row.pack(fill="x", padx=6, pady=2.5)
+            ind = ctk.CTkFrame(row, width=3, height=36, fg_color="transparent", corner_radius=2)
+            ind.pack(side="left", padx=(0, 8))
             self._page_indicators[key] = ind
             b = ctk.CTkButton(
-                row, text=f"{icon}  {label}", width=56, height=34, corner_radius=R_BUTTON,
-                fg_color="transparent", hover_color=CARD_HOVER,
-                text_color=MUTED, anchor="w",
-                font=ctk.CTkFont(size=11, weight="bold"),
+                row, text=f"{icon}  {label}", width=64, height=36, corner_radius=R_BUTTON,
+                fg_color="transparent", hover_color="#1e293b",  # slightly brighter hover for readability
+                text_color="#E2E8F0",  # was MUTED #94A3B8 — too dim, now high contrast
+                anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
                 command=lambda k=key: self._show_page(k),
             )
             b.pack(side="left", fill="x", expand=True)
@@ -496,12 +496,11 @@ class App(ctk.CTk):
         self._do_show(name)
 
     def _animate_sidebar(self, active: str):
-        # subtle 150ms highlight — no layout shift, just color/indicator
         for k, b in self._page_btns.items():
             is_active = k == active
             b.configure(fg_color=ACCENT if is_active else "transparent",
-                        text_color="white" if is_active else MUTED,
-                        hover_color=ACCENT_HOVER if is_active else CARD_HOVER)
+                        text_color="white" if is_active else "#E2E8F0",
+                        hover_color=ACCENT_HOVER if is_active else "#1e293b")
             ind = self._page_indicators.get(k)
             if ind is not None:
                 ind.configure(fg_color=ACCENT if is_active else "transparent")
