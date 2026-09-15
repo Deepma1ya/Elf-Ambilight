@@ -89,6 +89,16 @@ class Ambilight:
 
     async def stop(self):
         self._running = False
+        # stop dxcam capture if active
+        try:
+            cam = getattr(self._tls, "dxcam", None)
+            if cam is not None:
+                try:
+                    cam.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=3.0)
@@ -110,6 +120,46 @@ class Ambilight:
             self._tls.sct = sct
         return sct
 
+    def _thread_dxcam(self, box):
+        """Per-thread dxcam for high-FPS full-screen (Desktop Duplication, ~12 ms).
+        Reuses the singleton, restarts with new region/fps when needed."""
+        try:
+            import dxcam  # type: ignore
+        except Exception:
+            return None
+        region = (int(box["left"]), int(box["top"]),
+                  int(box["left"] + box["width"]), int(box["top"] + box["height"]))
+        target_fps = int(max(30, min(60, self.fps)))
+        cam = getattr(self._tls, "dxcam", None)
+        prev_region = getattr(self._tls, "dxcam_region", None)
+        prev_fps = getattr(self._tls, "dxcam_fps", None)
+        try:
+            if cam is None:
+                cam = dxcam.create(output_idx=0, output_color="BGRA")
+                if cam is None:
+                    return None
+                cam.start(region=region, target_fps=target_fps)
+                self._tls.dxcam = cam
+                self._tls.dxcam_region = region
+                self._tls.dxcam_fps = target_fps
+            elif prev_region != region or prev_fps != target_fps:
+                try:
+                    cam.stop()
+                except Exception:
+                    pass
+                cam.start(region=region, target_fps=target_fps)
+                self._tls.dxcam_region = region
+                self._tls.dxcam_fps = target_fps
+            # ensure it's running
+            if not getattr(cam, "is_capturing", True):
+                try:
+                    cam.start(region=region, target_fps=target_fps)
+                except Exception:
+                    pass
+        except Exception:
+            return None
+        return cam
+
     def _capture_box(self, sct):
         mon = sct.monitors[1]
         if self.capture_mode == "full":
@@ -117,6 +167,76 @@ class Ambilight:
         w, h = mon["width"], mon["height"]
         return {"left": mon["left"] + w // 4, "top": mon["top"] + h // 4,
                 "width": w // 2, "height": h // 2}
+
+    def _gdi_lowres_grab(self, box, tw, th):
+        """Try GDI StretchBlt to capture `box` directly at `tw×th` (very fast,
+        ~2-4 ms for full screen vs ~30 ms via mss at native res). Returns PIL
+        Image or None on failure (fallback to mss)."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            from PIL import Image
+            left, top, w, h = int(box["left"]), int(box["top"]), int(box["width"]), int(box["height"])
+            if w <= 0 or h <= 0 or tw <= 0 or th <= 0:
+                return None
+            user32 = ctypes.windll.user32
+            gdi32 = ctypes.windll.gdi32
+            # need a screen DC (0 = entire virtual screen)
+            hdc_screen = user32.GetDC(0)
+            if not hdc_screen:
+                return None
+            hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+            if not hdc_mem:
+                user32.ReleaseDC(0, hdc_screen)
+                return None
+            # DIB section at target size (32-bit, top-down)
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                            ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                            ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                            ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                            ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
+                            ("biClrImportant", wintypes.DWORD)]
+            class BITMAPINFO(ctypes.Structure):
+                _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
+            bmi = BITMAPINFO()
+            bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bmi.bmiHeader.biWidth = tw
+            bmi.bmiHeader.biHeight = -th  # top-down
+            bmi.bmiHeader.biPlanes = 1
+            bmi.bmiHeader.biBitCount = 32
+            bmi.bmiHeader.biCompression = 0  # BI_RGB
+            # create DIB section
+            ppvBits = ctypes.c_void_p()
+            hbm = gdi32.CreateDIBSection(hdc_screen, ctypes.byref(bmi), 0, ctypes.byref(ppvBits), None, 0)
+            if not hbm:
+                gdi32.DeleteDC(hdc_mem)
+                user32.ReleaseDC(0, hdc_screen)
+                return None
+            h_old = gdi32.SelectObject(hdc_mem, hbm)
+            # best quality stretch (HALFTONE = 4) — also need SetBrushOrgEx after
+            try:
+                gdi32.SetStretchBltMode(hdc_mem, 4)
+            except Exception:
+                pass
+            # StretchBlt from screen to our low-res DIB (hardware/GDI does the downscale)
+            SRCCOPY = 0x00CC0020
+            ok = gdi32.StretchBlt(hdc_mem, 0, 0, tw, th, hdc_screen, left, top, w, h, SRCCOPY)
+            # read bits
+            img = None
+            if ok:
+                # ppvBits points to BGRA bytes, row stride = tw*4
+                buf = ctypes.string_at(ppvBits, tw * th * 4)
+                # BGRA -> RGB via frombytes (BGRX)
+                img = Image.frombytes("RGB", (tw, th), buf, "raw", "BGRX")
+            # cleanup
+            gdi32.SelectObject(hdc_mem, h_old)
+            gdi32.DeleteObject(hbm)
+            gdi32.DeleteDC(hdc_mem)
+            user32.ReleaseDC(0, hdc_screen)
+            return img
+        except Exception:
+            return None
 
     @staticmethod
     def _ease_step(shown: list[float], target: tuple[int, int, int], f: float
@@ -250,7 +370,56 @@ class Ambilight:
         from PIL import Image
         t0 = time.perf_counter()
         sct = self._thread_sct()
-        shot = sct.grab(self._capture_box(sct))
+        box = self._capture_box(sct)
+        # high-FPS path: dxcam Desktop Duplication (~12-16 ms for full 1440p → 60fps)
+        # falls back to GDI low-res then mss
+        if self.fps >= 30:
+            try:
+                cam = self._thread_dxcam(box)
+                if cam is not None:
+                    frame = cam.get_latest_frame()
+                    if frame is not None:
+                        # frame is BGRA numpy (h×w×4)
+                        bh = max(1, int(box["height"]))
+                        bw = max(1, int(box["width"]))
+                        th = 50
+                        tw = max(1, round(bw * th / max(1, bh)))
+                        try:
+                            import cv2  # type: ignore
+                            small_np = cv2.resize(frame, (tw, th), interpolation=cv2.INTER_AREA)
+                            # BGRA → RGB for _analyze_small
+                            # cv2 gives BGRA, need RGB
+                            small_np = cv2.cvtColor(small_np, cv2.COLOR_BGRA2RGB)
+                            img = Image.fromarray(small_np, "RGB")
+                        except Exception:
+                            # fallback via PIL from BGRA
+                            h, w = frame.shape[:2]
+                            # frame is BGRA, convert via PIL
+                            img_full = Image.frombytes("RGB", (w, h), frame.tobytes(), "raw", "BGRX")
+                            resample = getattr(Image, "Resampling", Image).BILINEAR
+                            img = img_full.resize((tw, th), resample)
+                        stats = self._analyze_small(img)
+                        self.last_stats = stats
+                        self.last_capture_ms = (time.perf_counter() - t0) * 1000.0
+                        return stats
+            except Exception:
+                pass
+        # fast GDI path: capture directly at ~50px tall (89×50 for 16:9)
+        try:
+            bh = max(1, int(box["height"]))
+            bw = max(1, int(box["width"]))
+            th = 50
+            tw = max(1, round(bw * th / max(1, bh)))
+            img_low = self._gdi_lowres_grab(box, tw, th)
+            if img_low is not None:
+                stats = self._analyze_small(img_low)
+                self.last_stats = stats
+                self.last_capture_ms = (time.perf_counter() - t0) * 1000.0
+                return stats
+        except Exception:
+            pass
+        # fallback: mss at native res then downscale in _analyze_small
+        shot = sct.grab(box)
         img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         stats = self._analyze_small(img)
         self.last_stats = stats

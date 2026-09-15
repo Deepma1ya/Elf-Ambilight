@@ -541,6 +541,13 @@ class App(ctk.CTk):
                     self.ambilight._task.cancel()
                 except Exception:
                     pass
+            # stop dxcam if active
+            try:
+                cam = getattr(self.ambilight._tls, "dxcam", None)
+                if cam is not None:
+                    cam.stop()
+            except Exception:
+                pass
         except Exception:
             pass
         try:
@@ -1949,7 +1956,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(f, text="Ambilight", font=ctk.CTkFont(size=20, weight="bold"),
                       text_color=FG).pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(f, text="Screen average \u2192 realtime BLE packets. Calibration applied. "
-                              "Center 50% is fast enough for 60fps; Full needs \u226425fps.",
+                              "Both modes are 60fps capable — low-res 50px capture (dxcam when available).",
                       text_color=MUTED, wraplength=700).pack(anchor="w", pady=(0, 8))
 
         row = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
