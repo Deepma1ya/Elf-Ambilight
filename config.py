@@ -108,6 +108,8 @@ class Config:
 
     # Windows Dynamic Lighting mirror (experimental, off by default)
     dynlight_enabled: bool = False
+    # ambilight capture monitor: 1-based mss index (1 = primary), 0 = all
+    ambi_monitor: int = 1
 
     # timers
     t1_hour: int = 7
@@ -283,6 +285,10 @@ class Config:
                     c.ambi_use_dxcam = bool(c.ambi_use_dxcam)
                 except Exception:
                     c.ambi_use_dxcam = True
+                try:
+                    c.ambi_monitor = max(0, int(c.ambi_monitor))
+                except Exception:
+                    c.ambi_monitor = 1
                 return c
         except Exception:
             pass

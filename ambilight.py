@@ -56,6 +56,8 @@ class Ambilight:
         self.sample_hz = max(1.0, min(15.0, sample_hz))
         # optional Windows Dynamic Lighting mirror (DynLight, never blocks)
         self.dynlight = None
+        # capture monitor: 1-based mss index (1 = primary), 0 = all monitors
+        self.ambi_monitor = 1
         # latest sampled screen colour (written by sampler thread, read by loop)
         self._sampled_target: tuple[int, int, int] = (0, 0, 0)
         self._sampler_thread: threading.Thread | None = None
@@ -227,16 +229,19 @@ class Ambilight:
             self._tls.sct = sct
         return sct
 
-    def _thread_dxcam(self, box):
-        """Sampler-thread dxcam (Desktop Duplication). Duplication runs at the
-        *sample* rate (5Hz), not the fade rate — far less GPU/compositor load,
-        yet the fades stay silky because interpolation needs no captures."""
+    def _thread_dxcam(self, box, ox: int = 0, oy: int = 0):
+        """Sampler-thread dxcam (Desktop Duplication) on the primary output.
+        Duplication runs at the *sample* rate (5Hz), not the fade rate.
+        Region is relative to the output origin (fixes non-zero primaries).
+        Other monitors use the mss fallback — dxcam's singleton cannot
+        reliably hop outputs, and 5Hz mss is still cheap."""
         try:
             import dxcam  # type: ignore
         except Exception:
             return None
-        region = (int(box["left"]), int(box["top"]),
-                  int(box["left"] + box["width"]), int(box["top"] + box["height"]))
+        region = (int(box["left"] - ox), int(box["top"] - oy),
+                  int(box["left"] - ox + box["width"]),
+                  int(box["top"] - oy + box["height"]))
         target_fps = int(max(5, min(15, self.sample_hz)))
         cam = getattr(self._tls, "dxcam", None)
         prev_region = getattr(self._tls, "dxcam_region", None)
@@ -270,12 +275,32 @@ class Ambilight:
         return cam
 
     def _capture_box(self, sct):
-        mon = sct.monitors[1]
+        """Capture box + owning monitor for the selected monitor index.
+
+        Returns (box, mon, use_dxcam_ok): index 0 = all monitors (mss only,
+        dxcam cannot span outputs), 1-based = that mss monitor (clamped).
+        """
+        try:
+            mons = sct.monitors
+        except Exception:
+            mons = []
+        idx = max(0, int(self.ambi_monitor))
+        if not mons:
+            mon = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+            return ({"left": 480, "top": 270, "width": 960, "height": 540},
+                    mon, False)
+        if idx <= 0:
+            mon = mons[0]  # bounding box of all monitors
+            return (dict(mon), mon, False)
+        if idx >= len(mons):
+            idx = 1
+        mon = mons[idx]
         if self.capture_mode == "full":
-            return mon
+            return (dict(mon), mon, idx == 1)
         w, h = mon["width"], mon["height"]
-        return {"left": mon["left"] + w // 4, "top": mon["top"] + h // 4,
-                "width": w // 2, "height": h // 2}
+        box = {"left": mon["left"] + w // 4, "top": mon["top"] + h // 4,
+               "width": w // 2, "height": h // 2}
+        return (box, mon, idx == 1)
 
     # GDI low-res path removed — caused cursor flicker and was not faster than
     # dxcam/mss on this hardware. Keeping dxcam (GPU) + mss (CPU) only.
@@ -419,14 +444,15 @@ class Ambilight:
         from PIL import Image
         t0 = time.perf_counter()
         sct = self._thread_sct()
-        box = self._capture_box(sct)
+        box, mon, dx_ok = self._capture_box(sct)
         # GPU path: dxcam Desktop Duplication; single resize straight to the
         # thumbnail size (no intermediate 50px step). mss fallback never
         # flickers (SRCCOPY without CAPTUREBLT) but costs a GDI readback —
         # which is exactly why sampling runs at 5Hz in the background.
-        if self.use_dxcam:
+        if self.use_dxcam and dx_ok:
             try:
-                cam = self._thread_dxcam(box)
+                cam = self._thread_dxcam(box, int(mon.get("left", 0)),
+                                         int(mon.get("top", 0)))
                 if cam is not None:
                     frame = cam.get_latest_frame()
                     if frame is not None:
@@ -524,18 +550,20 @@ class Ambilight:
                     self._shown = [float(cur[0]), float(cur[1]), float(cur[2])]
                     self.last_color = cur
                     if cur != self._last_sent:
-                        targets = [a for a in self.get_targets() if self.ble.is_connected(a)]
+                        raw = self.get_targets()
+                        targets = [a for a in raw if self.ble.is_connected(a)]
                         if targets:
                             pkt = pkt_color_realtime(*cur)
                             await self.ble.write_many(targets, pkt, response=False)
                             self.sends += 1
                             self._last_sent = cur
                             self.last_send = time.monotonic()
-                            try:
-                                if self.dynlight is not None:
-                                    self.dynlight.push(*cur)
-                            except Exception:
-                                pass
+                        try:  # PC strip follows only when it is in the group
+                            from dynlight import VIRTUAL_ADDR
+                            if self.dynlight is not None and VIRTUAL_ADDR in raw:
+                                self.dynlight.push(*cur)
+                        except Exception:
+                            pass
                 else:
                     # ── direct: instant jump, throttled by update_interval ──
                     cur = (sr, sg, sb)
@@ -547,7 +575,8 @@ class Ambilight:
                             and (abs(cur[0] - lr) >= self.min_delta
                                  or abs(cur[1] - lg) >= self.min_delta
                                  or abs(cur[2] - lb) >= self.min_delta)):
-                        targets = [a for a in self.get_targets() if self.ble.is_connected(a)]
+                        raw = self.get_targets()
+                        targets = [a for a in raw if self.ble.is_connected(a)]
                         if targets:
                             pkt = pkt_color_realtime(*cur)
                             await self.ble.write_many(targets, pkt, response=False)
@@ -556,11 +585,12 @@ class Ambilight:
                             self.last_send = time.monotonic()
                             self._fade_target = cur
                             self._fade_t0 = now
-                            try:
-                                if self.dynlight is not None:
-                                    self.dynlight.push(*cur)
-                            except Exception:
-                                pass
+                        try:  # PC strip follows only when it is in the group
+                            from dynlight import VIRTUAL_ADDR
+                            if self.dynlight is not None and VIRTUAL_ADDR in raw:
+                                self.dynlight.push(*cur)
+                        except Exception:
+                            pass
             except asyncio.CancelledError:
                 break
             except Exception:

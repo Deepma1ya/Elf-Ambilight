@@ -37,6 +37,10 @@ except Exception:
 # LampArray HID interface-class GUID — the AQS-selector overload is not
 # projected, so enumeration lists everything and filters on this substring.
 _LAMP_IFACE_GUID = "4d1e55b2"
+
+# Virtual strip address: PC Lighting joins groups like any BLE light.
+# It never touches BLE — sends addressed here route to LampArray push().
+VIRTUAL_ADDR = "dynlight://pc"
 _OPEN_TIMEOUT = 5.0      # abandon stuck opens after this (daemon thread leaks are fine)
 _PUSH_MIN_GAP = 0.10     # at most 10 HID writes/sec per worker
 

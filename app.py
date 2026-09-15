@@ -387,6 +387,10 @@ class App(ctk.CTk):
                                    use_dxcam=self.cfg.ambi_use_dxcam)
         self.ambilight.sample_mode = self.cfg.ambi_sample
         self.ambilight.calibrate = self.cfg.cal_apply
+        try:
+            self.ambilight.ambi_monitor = max(0, int(self.cfg.ambi_monitor))
+        except Exception:
+            pass
         from dynlight import DynLight
         self.dynlight = DynLight()
         self.dynlight.enabled = bool(self.cfg.dynlight_enabled)
@@ -796,6 +800,14 @@ class App(ctk.CTk):
 
     def _targets(self) -> list[str]:
         addrs = [a for a in self.cfg.targets() if self.ble.is_connected(a)]
+        try:  # PC strip joins when grouped and its lamps are open
+            from dynlight import VIRTUAL_ADDR
+            if (VIRTUAL_ADDR in self.cfg.targets()
+                    and VIRTUAL_ADDR not in addrs
+                    and self.dynlight.lamp_count > 0):
+                addrs.append(VIRTUAL_ADDR)
+        except Exception:
+            pass
         return addrs or self.ble.connected_addresses()
 
     @staticmethod
@@ -810,7 +822,13 @@ class App(ctk.CTk):
 
     def _send_pkt(self, pkt, what):
         addrs = self._targets()
-        if not addrs:
+        try:
+            from dynlight import VIRTUAL_ADDR
+            want_dyn = VIRTUAL_ADDR in addrs
+        except Exception:
+            want_dyn = False
+        ble_addrs = [a for a in addrs if a != VIRTUAL_ADDR]
+        if not ble_addrs and not want_dyn:
             self._log("No device connected.")
             return
         # calibration
@@ -823,18 +841,23 @@ class App(ctk.CTk):
                 pkt = bytes([pkt[0], pkt[1], pkt[2], pkt[3], cr, cg, cb, pkt[7], pkt[8]])
                 note = f" cal({cr},{cg},{cb})"
             dyn_rgb = (cr, cg, cb)
-        if dyn_rgb is not None:
+        if dyn_rgb is not None and want_dyn:
             try:
                 self.dynlight.push(*dyn_rgb)
             except Exception:
                 pass
 
         async def _do():
-            res = await self.ble.write_many(addrs, pkt)
+            if not ble_addrs:
+                return
+            res = await self.ble.write_many(ble_addrs, pkt)
             fails = [a for a, ok, _ in res if not ok]
             if fails:
                 raise RuntimeError(f"write failed: {fails}")
-        self._log(f"TX {what}{note} → {len(addrs)} dev")
+        dest = f"{len(ble_addrs)} dev" if ble_addrs else "PC Lighting"
+        if ble_addrs and want_dyn and dyn_rgb is not None:
+            dest += " + PC"
+        self._log(f"TX {what}{note} → {dest}")
         self._run_async(_do())
 
     def _send_power(self, on):
@@ -1216,8 +1239,54 @@ class App(ctk.CTk):
         checked = getattr(self, "_dev_checked", None)
         if checked is None:
             checked = self._dev_checked = set()
-        checked.intersection_update(all_addrs)
+        try:
+            from dynlight import VIRTUAL_ADDR, winrt_available
+            _dyn_show = winrt_available()
+        except Exception:
+            VIRTUAL_ADDR = ""
+            _dyn_show = False
+        checked.intersection_update(all_addrs | ({VIRTUAL_ADDR} if VIRTUAL_ADDR else set()))
         cur_group = self.cfg.groups.get(self.cfg.selected_group, [])
+        if _dyn_show:
+            try:
+                _dsnap = self.dynlight.snapshot()
+            except Exception:
+                _dsnap = {"lamps": 0, "devices": [], "error": ""}
+            _dlive = _dsnap.get("lamps", 0) > 0
+            _din_current = VIRTUAL_ADDR in cur_group
+            _drow = ctk.CTkFrame(self.dev_frame,
+                                 fg_color=CARD_HOVER if _dlive else "transparent",
+                                 corner_radius=R_SMALL, height=32)
+            _drow.pack(fill="x", pady=1)
+            _drow.pack_propagate(False)
+            _dcb = ctk.CTkCheckBox(_drow, text="", width=24, corner_radius=R_SMALL,
+                                   command=lambda: self._dev_check_toggle(VIRTUAL_ADDR))
+            _dcb.pack(side="left", padx=(2, 0))
+            if VIRTUAL_ADDR in checked:
+                _dcb.select()
+            ctk.CTkLabel(_drow, text="\u25cf" if _dlive else "\u25cb",
+                         text_color=GREEN if _dlive else MUTED,
+                         font=ctk.CTkFont(size=14), width=20).pack(side="left", padx=4)
+            ctk.CTkLabel(_drow, text="PC Lighting", text_color=FG,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=4)
+            if _dlive:
+                _dsub = "%d lamp(s) · %s" % (_dsnap.get("lamps", 0),
+                                            ", ".join(_dsnap.get("devices", [])[:2]))
+            elif _dsnap.get("error"):
+                _dsub = "busy — yield in vendor apps, Refresh in Setup"
+            else:
+                _dsub = "Dynamic Lighting · enable + Refresh in Setup"
+            ctk.CTkLabel(_drow, text=_dsub, text_color=MUTED,
+                         font=ctk.CTkFont(family="Consolas", size=10)).pack(side="left", padx=8)
+            ctk.CTkButton(_drow, text="\u2713" if _din_current else "+",
+                          width=30, height=24, corner_radius=R_SMALL,
+                          fg_color=CARD_HOVER if _din_current else ACCENT,
+                          hover_color=CARD_HOVER if _din_current else ACCENT_HOVER,
+                          text_color=MUTED if _din_current else FG,
+                          state="disabled" if _din_current else "normal",
+                          font=ctk.CTkFont(size=12, weight="bold"),
+                          command=lambda: self._group_add_one(VIRTUAL_ADDR)).pack(side="right", padx=4)
+            self.dev_labels.append(_drow)
         # which group(s) each address already belongs to
         in_groups: dict[str, list[str]] = {}
         for gname, members in self.cfg.groups.items():
@@ -2434,6 +2503,20 @@ class App(ctk.CTk):
                            values=["Center 50% (fast)", "Full screen (slow)"],
                            width=170, corner_radius=8,
                            command=lambda _: self._ambi_refresh()).pack(side="left")
+        ctk.CTkLabel(mrow, text="Monitor", text_color=MUTED).pack(side="left", padx=(12, 6))
+        self._ambi_mon_items = self._list_monitors()
+        _mon_labels = [lb for _, lb in self._ambi_mon_items]
+        _cur_idx = max(0, int(getattr(self.cfg, "ambi_monitor", 1) or 0))
+        _cur_lb = _mon_labels[0]
+        for _i, _lb in self._ambi_mon_items:
+            if _i == _cur_idx:
+                _cur_lb = _lb
+                break
+        self._ambi_mon_var = ctk.StringVar(value=_cur_lb)
+        ctk.CTkOptionMenu(mrow, variable=self._ambi_mon_var,
+                           values=_mon_labels,
+                           width=220, corner_radius=8,
+                           command=lambda _: self._ambi_refresh()).pack(side="left")
 
         srow = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         srow.pack(fill="x", pady=(0, 8))
@@ -2567,6 +2650,30 @@ class App(ctk.CTk):
         except Exception:
             return "center"
 
+    @staticmethod
+    def _list_monitors():
+        """[(0, 'All monitors'), (1, 'Monitor 1 (primary) WxH'), ...]."""
+        items = [(0, "All monitors")]
+        try:
+            import mss
+            with mss.mss() as sct:
+                for i, m in enumerate(sct.monitors[1:], start=1):
+                    tag = " (primary)" if i == 1 else ""
+                    items.append((i, "Monitor %d%s %dx%d" % (i, tag, m["width"], m["height"])))
+        except Exception:
+            items.append((1, "Monitor 1 (primary)"))
+        return items
+
+    def _ambi_mon_idx(self) -> int:
+        try:
+            sel = self._ambi_mon_var.get()
+            for idx, lb in self._ambi_mon_items:
+                if lb == sel:
+                    return idx
+        except Exception:
+            pass
+        return 1
+
     AMBI_PRESETS = {
         "Movie": {"fps": 30, "smooth": 2.0, "brightness": 80, "min_delta": 8,
                   "interval": 0.80, "mode": "center", "sample": "average"},
@@ -2627,6 +2734,11 @@ class App(ctk.CTk):
             self.cfg.ambi_min_delta = int(self._ambi_vars["min_delta"].get())
             self.cfg.ambi_mode = self._ambi_mode()
             self.cfg.ambi_sample = self._ambi_sample()
+            try:
+                self.cfg.ambi_monitor = self._ambi_mon_idx()
+                self.ambilight.ambi_monitor = self.cfg.ambi_monitor
+            except Exception:
+                pass
             self.cfg.ambi_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
             try:
                 self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
@@ -2661,6 +2773,10 @@ class App(ctk.CTk):
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
+        try:
+            self.ambilight.ambi_monitor = self._ambi_mon_idx()
+        except Exception:
+            pass
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
         try:
             self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
@@ -2735,6 +2851,10 @@ class App(ctk.CTk):
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
+        try:
+            self.ambilight.ambi_monitor = self._ambi_mon_idx()
+        except Exception:
+            pass
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
         try:
             self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
