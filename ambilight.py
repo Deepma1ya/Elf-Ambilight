@@ -4,10 +4,12 @@ Performance design (60fps capable):
 - One mss instance per capture thread (thread-local), reused across frames.
   Creating mss.MSS() per frame re-enumerates monitors (~5-15ms) — avoided.
 - One grab analyzed once into all sampling candidates; single Python pass
-  over a 48px thumbnail (box pre-shrink keeps it ~1ms).
+  over a ~90×50 thumbnail (box pre-shrink keeps it ~1ms, 50px tall).
 - The strip is crossfaded: an eased position chases the target and packets
   go out at most every update_interval seconds — smooth, no BLE flooding.
 - Idle backoff: identical thumbnails put the loop into 4Hz eco polling.
+- Privacy/low-CPU: capture is immediately downscaled to ~50px tall and never
+  saved — only the average/dominant colour is kept.
 """
 from __future__ import annotations
 import asyncio
@@ -153,9 +155,12 @@ class Ambilight:
         if w > 640:
             img = img.reduce(8 if w > 1280 else 4)
             w, h = img.size
-        th = max(1, round(h * 48 / max(1, w)))
+        # very low-res input: 50px tall, width scaled to keep aspect (e.g. 16:9 → 89×50)
+        # previous was 48px wide (~48×27 for 16:9) — now ~50px tall, still tiny and fast
+        target_h = 50
+        target_w = max(1, round(w * target_h / max(1, h)))
         resample = getattr(Image, "Resampling", Image).BILINEAR
-        small = img.resize((48, th), resample) if (w, h) != (48, th) else img
+        small = img.resize((target_w, target_h), resample) if (w, h) != (target_w, target_h) else img
         self._thumb_bytes = small.tobytes()
         px = list(small.getdata())
         n = max(1, len(px))
