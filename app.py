@@ -1150,7 +1150,7 @@ class App(ctk.CTk):
         ctk.CTkButton(row, text="Disconnect", corner_radius=8, width=90,
                        fg_color="#443333", hover_color="#663333",
                        command=self._disconnect_selected).pack(side="left", padx=2)
-        ctk.CTkButton(row, text="+ Group", corner_radius=8, width=70,
+        ctk.CTkButton(row, text="Add all", corner_radius=8, width=70,
                        command=self._add_to_group).pack(side="left", padx=(14, 2))
 
         # device list
@@ -1173,8 +1173,6 @@ class App(ctk.CTk):
         self.group_menu.pack(side="left", padx=4)
         ctk.CTkButton(g_frame, text="New", corner_radius=8, width=50,
                        command=self._new_group).pack(side="left", padx=4)
-        ctk.CTkButton(g_frame, text="Remove", corner_radius=8, width=60,
-                       fg_color="#443333", command=self._remove_from_group).pack(side="left", padx=4)
 
         # group members
         self.members_frame = ctk.CTkScrollableFrame(f, fg_color=CARD, corner_radius=10,
@@ -1200,9 +1198,16 @@ class App(ctk.CTk):
         self.dev_labels.clear()
 
         all_addrs = set(self.cfg.last_addresses) | set(self.found.keys()) | set(self.ble.connected_addresses())
-        for addr in all_addrs:
+        cur_group = self.cfg.groups.get(self.cfg.selected_group, [])
+        # which group(s) each address already belongs to
+        in_groups: dict[str, list[str]] = {}
+        for gname, members in self.cfg.groups.items():
+            for a in members:
+                in_groups.setdefault(a, []).append(gname)
+        for addr in sorted(all_addrs):
             name = self.cfg.names.get(addr, self.found.get(addr, FoundDevice("", addr)).name)
             connected = self.ble.is_connected(addr)
+            in_current = addr in cur_group
             row = ctk.CTkFrame(self.dev_frame, fg_color=CARD_HOVER if connected else "transparent",
                                 corner_radius=R_SMALL, height=32)
             row.pack(fill="x", pady=1)
@@ -1214,6 +1219,18 @@ class App(ctk.CTk):
                           font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=4)
             ctk.CTkLabel(row, text=addr, text_color=MUTED,
                           font=ctk.CTkFont(family="Consolas", size=10)).pack(side="left", padx=8)
+            groups_of = in_groups.get(addr, [])
+            if groups_of:
+                ctk.CTkLabel(row, text="· " + ", ".join(groups_of), text_color=MUTED_DIM,
+                              font=ctk.CTkFont(size=10)).pack(side="left", padx=2)
+            ctk.CTkButton(row, text="\u2713" if in_current else "+",
+                           width=30, height=24, corner_radius=R_SMALL,
+                           fg_color="transparent" if in_current else ACCENT,
+                           hover_color=ACCENT_HOVER if not in_current else "transparent",
+                           text_color=MUTED if in_current else FG,
+                           state="disabled" if in_current else "normal",
+                           font=ctk.CTkFont(size=12, weight="bold"),
+                           command=lambda a=addr: self._group_add_one(a)).pack(side="right", padx=4)
             self.dev_labels.append(row)
 
     def _refresh_groups(self):
@@ -1224,11 +1241,16 @@ class App(ctk.CTk):
         for addr in self.cfg.targets():
             name = self.cfg.names.get(addr, "?")
             connected = self.ble.is_connected(addr)
-            r = ctk.CTkFrame(self.members_frame, fg_color="transparent", height=24)
+            r = ctk.CTkFrame(self.members_frame, fg_color="transparent", height=28)
             r.pack(fill="x")
+            r.pack_propagate(False)
             ctk.CTkLabel(r, text=f"\u25cf {name}  {addr}" if connected else f"\u25cb {name}  {addr}",
                           text_color=GREEN if connected else MUTED,
-                          font=ctk.CTkFont(size=11)).pack(anchor="w")
+                          font=ctk.CTkFont(size=11)).pack(side="left")
+            ctk.CTkButton(r, text="\u00d7", width=28, height=22, corner_radius=R_SMALL,
+                           fg_color="transparent", hover_color="#2a1a1a", text_color=RED,
+                           font=ctk.CTkFont(size=13, weight="bold"),
+                           command=lambda a=addr: self._group_remove_one(a)).pack(side="right", padx=4)
         self.dev_status.configure(
             text=f"Connected: {len(self.ble.connected_addresses())}  ·  "
                  f"Group: {self.cfg.selected_group}  ·  "
@@ -1286,16 +1308,6 @@ class App(ctk.CTk):
 
         self._run_async(_do(), ok="Quick scan done.", on_err=self._bt_check_error)
 
-    def _sel_addr(self) -> Optional[str]:
-        sel = self.dev_frame.winfo_children()
-        for w in sel:
-            # try to get from found or last_addresses
-            pass
-        # fallback: pick first in found
-        if self.found:
-            return next(iter(self.found))
-        return None
-
     def _connect_selected(self):
         if not self.found:
             self._log("No devices found. Scan first.")
@@ -1328,17 +1340,55 @@ class App(ctk.CTk):
                 self._log(f"Disconnected {a}")
         self._run_async(_do())
 
-    def _add_to_group(self):
-        if not self.found:
+    def _group_add_one(self, addr: str):
+        """Add one light to the selected group (per-row + button)."""
+        g = self.cfg.selected_group
+        grp = self.cfg.groups.setdefault(g, [])
+        if addr in grp:
+            self._log(f"Already in '{g}'.")
             return
-        for addr in list(self.found.keys()):
-            g = self.cfg.selected_group
-            if addr not in self.cfg.groups[g]:
-                self.cfg.groups[g].append(addr)
-                self.cfg.remember_name(addr, self.found[addr].name)
+        grp.append(addr)
+        name = self.cfg.names.get(addr, "")
+        if not name and addr in self.found:
+            name = self.found[addr].name
+            self.cfg.remember_name(addr, name)
         self._save_devices_state()
+        self._refresh_devices()
         self._refresh_groups()
-        self._log(f"Added devices to '{self.cfg.selected_group}'.")
+        self._log(f"Added {name or addr} to '{g}'.")
+
+    def _group_remove_one(self, addr: str):
+        """Remove one light from the selected group (per-row × button)."""
+        g = self.cfg.selected_group
+        grp = self.cfg.groups.get(g, [])
+        if addr not in grp:
+            return
+        grp.remove(addr)
+        self._save_devices_state()
+        self._refresh_devices()
+        self._refresh_groups()
+        name = self.cfg.names.get(addr, addr)
+        self._log(f"Removed {name} from '{g}'.")
+
+    def _add_to_group(self):
+        """Add ALL known lights to the selected group (bulk action)."""
+        known = set(self.cfg.last_addresses) | set(self.found.keys()) | set(self.ble.connected_addresses())
+        if not known:
+            self._log("No known devices. Scan first.")
+            return
+        g = self.cfg.selected_group
+        grp = self.cfg.groups.setdefault(g, [])
+        added = 0
+        for addr in known:
+            if addr not in grp:
+                grp.append(addr)
+                if addr in self.found:
+                    self.cfg.remember_name(addr, self.found[addr].name)
+                added += 1
+        self._save_devices_state()
+        self._refresh_devices()
+        self._refresh_groups()
+        self._log(f"Added {added} device(s) to '{g}'.")
 
     def _select_group(self):
         self.cfg.selected_group = self.group_var.get()
@@ -1366,14 +1416,6 @@ class App(ctk.CTk):
             top.destroy()
 
         ctk.CTkButton(top, text="Create", corner_radius=8, command=_ok).pack(pady=6)
-
-    def _remove_from_group(self):
-        g = self.cfg.selected_group
-        addrs = self.cfg.groups.get(g, [])
-        if addrs:
-            self.cfg.groups[g] = addrs[:-1]
-            self._save_devices_state()
-            self._refresh_groups()
 
     # ════════════════════════════════════════════════════════════════
     # COLOR PAGE
