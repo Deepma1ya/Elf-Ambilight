@@ -47,7 +47,6 @@ class Ambilight:
         self._task: asyncio.Task | None = None
         self._running = False
         self.last_color = (0, 0, 0)
-        self._sm = [0.0, 0.0, 0.0]
         self._shown = [0.0, 0.0, 0.0]  # crossfade position (floats)
         self.last_send = 0.0
         self.frames = 0
@@ -58,6 +57,10 @@ class Ambilight:
         self._prev_thumb: bytes | None = None
         self._thumb_bytes: bytes = b""
         self._tls = threading.local()
+        # temporal dominant lock — prevents flickering on mixed-color screens
+        self._dom_target: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._dom_ema: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._dom_ema_init = False
 
     def start(self):
         """Must be called from inside the asyncio loop thread (create_task
@@ -129,7 +132,9 @@ class Ambilight:
         """One pass over a tiny image -> all sampling candidates.
 
         average:   mean color (classic ambilight)
-        dominant:  most frequent color (12-bit quantized histogram peak)
+        dominant:  most prominent color region — 4-bit quantized histogram,
+                   neighboring bins merged, weighted-average centroid of the
+                   largest cluster (stable, no frame-to-frame jumping).
         vibrant:   pixel maximizing saturation*brightness (neon pop)
         brightest: pixel with max r+g+b (highlights/flashes)
 
@@ -137,7 +142,7 @@ class Ambilight:
         """
         from PIL import Image
         w, h = img.size
-        if w > 640:  # fast box pre-shrink; BILINEAR finish below stays accurate
+        if w > 640:
             img = img.reduce(8 if w > 1280 else 4)
             w, h = img.size
         th = max(1, round(h * 48 / max(1, w)))
@@ -146,37 +151,84 @@ class Ambilight:
         self._thumb_bytes = small.tobytes()
         px = list(small.getdata())
         n = max(1, len(px))
+
         sr = sg = sb = 0
-        hist: dict[int, int] = {}
-        dom_n = 0
-        dom = (0, 0, 0)
+        # 4-bit quantized bins (4096 entries) with weight accumulation
+        hist: dict[int, list] = {}  # key -> [count, sum_r, sum_g, sum_b]
         vib_s = -1
         vib = (0, 0, 0)
         bri_v = -1
         bri = (0, 0, 0)
+
         for (r, g, b) in px:
             sr += r
             sg += g
             sb += b
-            key = ((r & 0xF0) << 4) | (g & 0xF0) | (b >> 4)
-            c = hist.get(key, 0) + 1
-            hist[key] = c
-            if c > dom_n:
-                dom_n = c
-                dom = (((key >> 8) & 15) * 17, ((key >> 4) & 15) * 17, (key & 15) * 17)
+            # 4-bit per channel = 4096 bins (vs old 12-bit = 4096 but better grouping)
+            key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)
+            entry = hist.get(key)
+            if entry is None:
+                hist[key] = [1, r, g, b]
+            else:
+                entry[0] += 1
+                entry[1] += r
+                entry[2] += g
+                entry[3] += b
+            # vibrant: max saturation * brightness
             mx = r if r >= g and r >= b else (g if g >= b else b)
             mn = r if r <= g and r <= b else (g if g <= b else b)
             vs = (mx - mn) * mx
             if vs > vib_s:
                 vib_s = vs
                 vib = (r, g, b)
+            # brightest: max r+g+b
             br = r + g + b
             if br > bri_v:
                 bri_v = br
                 bri = (r, g, b)
+
+        # --- dominant: find the largest cluster, merge neighbors, centroid ---
+        # Sort bins by pixel count descending; greedily merge adjacent bins
+        # into the same cluster.  Two bins are "adjacent" when their 4-bit
+        # channel indices differ by at most 1 in each channel.
+        sorted_keys = sorted(hist.keys(), key=lambda k: hist[k][0], reverse=True)
+        claimed: set[int] = set()
+        best_count = 0
+        best_r = best_g = best_b = 0.0
+
+        for key in sorted_keys:
+            if key in claimed:
+                continue
+            entry = hist[key]
+            count = entry[0]
+            sum_r, sum_g, sum_b = entry[1], entry[2], entry[3]
+            kr = (key >> 8) & 15
+            kg = (key >> 4) & 15
+            kb = key & 15
+            claimed.add(key)
+            # absorb every neighbor within ±1 on each channel
+            for dk in range(-1, 2):
+                for dg in range(-1, 2):
+                    for db in range(-1, 2):
+                        nk = ((kr + dk) << 8) | ((kg + dg) << 4) | (kb + db)
+                        if nk == key or nk in claimed:
+                            continue
+                        e = hist.get(nk)
+                        if e is not None:
+                            count += e[0]
+                            sum_r += e[1]
+                            sum_g += e[2]
+                            sum_b += e[3]
+                            claimed.add(nk)
+            if count > best_count:
+                best_count = count
+                best_r = sum_r / count
+                best_g = sum_g / count
+                best_b = sum_b / count
+
         return {
             "average": (sr // n, sg // n, sb // n),
-            "dominant": dom,
+            "dominant": (int(best_r), int(best_g), int(best_b)),
             "vibrant": vib,
             "brightest": bri,
         }
@@ -221,24 +273,46 @@ class Ambilight:
                 else:
                     self._still = 0
                     self._prev_thumb = self._thumb_bytes
-                # capture smoothing (noise reduction)
-                s = self.smooth
-                self._sm[0] += (r - self._sm[0]) * s
-                self._sm[1] += (g - self._sm[1]) * s
-                self._sm[2] += (b - self._sm[2]) * s
-                sr, sg, sb = (int(self._sm[0]), int(self._sm[1]), int(self._sm[2]))
-                sr, sg, sb = self._apply_brightness(sr, sg, sb)
+
+                # --- temporal target lock ---
+                # Apply EMA on the raw sample so the crossfade target
+                # doesn't jump between nearby hues each frame.
+                raw = (float(r), float(g), float(b))
+                ts = 0.25  # EMA factor (lower = more stable, 0.25 ≈ 4-frame settling)
+                if not self._dom_ema_init:
+                    self._dom_ema = raw
+                    self._dom_ema_init = True
+                else:
+                    self._dom_ema = (
+                        self._dom_ema[0] + (raw[0] - self._dom_ema[0]) * ts,
+                        self._dom_ema[1] + (raw[1] - self._dom_ema[1]) * ts,
+                        self._dom_ema[2] + (raw[2] - self._dom_ema[2]) * ts,
+                    )
+
+                # lock: only update target if new color differs enough
+                # (prevents flicker when screen has many competing colors)
+                diff = max(abs(self._dom_ema[i] - self._dom_target[i]) for i in range(3))
+                if diff > 3.0:
+                    self._dom_target = self._dom_ema
+
+                sr, sg, sb = self._apply_brightness(
+                    int(self._dom_target[0]),
+                    int(self._dom_target[1]),
+                    int(self._dom_target[2]))
                 if self.calibrate is not None:
                     try:
                         sr, sg, sb = self.calibrate(sr, sg, sb)
                     except Exception:
                         pass
-                # crossfade toward target, then pace the strip updates
-                cur = self._ease_step(self._shown, (sr, sg, sb), s)
-                lr, lg, lb = self.last_color
+
+                # --- crossfade (runs every frame at FPS rate) ---
+                cur = self._ease_step(self._shown, (sr, sg, sb), self.smooth)
+
+                # --- packet send (throttled by update_interval) ---
                 now = time.monotonic()
-                if (cur != (lr, lg, lb)
-                        and (now - self.last_send) >= self.update_interval
+                lr, lg, lb = self.last_color
+                self.last_color = cur  # advance visual position every frame
+                if ((now - self.last_send) >= self.update_interval
                         and (abs(cur[0] - lr) >= self.min_delta
                              or abs(cur[1] - lg) >= self.min_delta
                              or abs(cur[2] - lb) >= self.min_delta)):
@@ -247,7 +321,6 @@ class Ambilight:
                         pkt = pkt_color_realtime(*cur)
                         await self.ble.write_many(targets, pkt, response=False)
                         self.sends += 1
-                        self.last_color = cur
                         self.last_send = time.monotonic()
             except asyncio.CancelledError:
                 break
@@ -255,7 +328,7 @@ class Ambilight:
                 await asyncio.sleep(0.25)
             dt = time.monotonic() - t0
             if self._still > still_needed:
-                self.eco = True  # still screen: 4Hz polling instead of full rate
+                self.eco = True
                 await asyncio.sleep(max(0.0, 0.25 - dt))
             else:
                 self.eco = False
