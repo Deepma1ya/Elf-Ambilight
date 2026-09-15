@@ -387,6 +387,12 @@ class App(ctk.CTk):
                                    use_dxcam=self.cfg.ambi_use_dxcam)
         self.ambilight.sample_mode = self.cfg.ambi_sample
         self.ambilight.calibrate = self.cfg.cal_apply
+        from dynlight import DynLight
+        self.dynlight = DynLight()
+        self.dynlight.enabled = bool(self.cfg.dynlight_enabled)
+        self.ambilight.dynlight = self.dynlight
+        if self.dynlight.enabled:
+            self.after(6000, lambda: self.dynlight.request_refresh())
         self._color = (self.cfg.last_r, self.cfg.last_g, self.cfg.last_b)
 
         self._page_builders = {
@@ -809,12 +815,19 @@ class App(ctk.CTk):
             return
         # calibration
         note = ""
+        dyn_rgb = None
         if len(pkt) == 9 and pkt[0] == 0x7E and pkt[1] == 0x07 and pkt[2] == 0x05 and pkt[3] == 0x03 and pkt[7] in (0x10, 0x20):
             r, g, b = pkt[4], pkt[5], pkt[6]
             cr, cg, cb = self.cfg.cal_apply(r, g, b)
             if (cr, cg, cb) != (r, g, b):
                 pkt = bytes([pkt[0], pkt[1], pkt[2], pkt[3], cr, cg, cb, pkt[7], pkt[8]])
                 note = f" cal({cr},{cg},{cb})"
+            dyn_rgb = (cr, cg, cb)
+        if dyn_rgb is not None:
+            try:
+                self.dynlight.push(*dyn_rgb)
+            except Exception:
+                pass
 
         async def _do():
             res = await self.ble.write_many(addrs, pkt)
@@ -1152,6 +1165,8 @@ class App(ctk.CTk):
                        command=self._disconnect_selected).pack(side="left", padx=2)
         ctk.CTkButton(row, text="Add all", corner_radius=8, width=70,
                        command=self._add_to_group).pack(side="left", padx=(14, 2))
+        ctk.CTkButton(row, text="Add checked", corner_radius=8, width=90,
+                       fg_color=ACCENT_DIM, command=self._group_add_checked).pack(side="left", padx=2)
 
         # device list
         self.dev_frame = ctk.CTkScrollableFrame(f, fg_color=CARD, corner_radius=10,
@@ -1198,6 +1213,10 @@ class App(ctk.CTk):
         self.dev_labels.clear()
 
         all_addrs = set(self.cfg.last_addresses) | set(self.found.keys()) | set(self.ble.connected_addresses())
+        checked = getattr(self, "_dev_checked", None)
+        if checked is None:
+            checked = self._dev_checked = set()
+        checked.intersection_update(all_addrs)
         cur_group = self.cfg.groups.get(self.cfg.selected_group, [])
         # which group(s) each address already belongs to
         in_groups: dict[str, list[str]] = {}
@@ -1212,6 +1231,11 @@ class App(ctk.CTk):
                                 corner_radius=R_SMALL, height=32)
             row.pack(fill="x", pady=1)
             row.pack_propagate(False)
+            cb = ctk.CTkCheckBox(row, text="", width=24, corner_radius=R_SMALL,
+                                 command=lambda a=addr: self._dev_check_toggle(a))
+            cb.pack(side="left", padx=(2, 0))
+            if addr in checked:
+                cb.select()
             ctk.CTkLabel(row, text="\u25cf" if connected else "\u25cb",
                           text_color=GREEN if connected else MUTED,
                           font=ctk.CTkFont(size=14), width=20).pack(side="left", padx=4)
@@ -1356,6 +1380,37 @@ class App(ctk.CTk):
         self._refresh_devices()
         self._refresh_groups()
         self._log(f"Added {name or addr} to '{g}'.")
+
+    def _dev_check_toggle(self, addr: str):
+        """Toggle a device-list checkbox (bulk selection for Add checked)."""
+        checked = getattr(self, "_dev_checked", None)
+        if checked is None:
+            checked = self._dev_checked = set()
+        if addr in checked:
+            checked.discard(addr)
+        else:
+            checked.add(addr)
+
+    def _group_add_checked(self):
+        """Add all checked lights to the selected group."""
+        checked = sorted(getattr(self, "_dev_checked", set()))
+        if not checked:
+            self._log("Nothing checked. Tick the boxes next to the lights first.")
+            return
+        g = self.cfg.selected_group
+        grp = self.cfg.groups.setdefault(g, [])
+        added = 0
+        for addr in checked:
+            if addr not in grp:
+                grp.append(addr)
+                if addr in self.found:
+                    self.cfg.remember_name(addr, self.found[addr].name)
+                added += 1
+        self._dev_checked.clear()
+        self._save_devices_state()
+        self._refresh_devices()
+        self._refresh_groups()
+        self._log(f"Added {added} checked device(s) to '{g}'.")
 
     def _group_remove_one(self, addr: str):
         """Remove one light from the selected group (per-row × button)."""
@@ -2755,6 +2810,24 @@ class App(ctk.CTk):
                        fg_color="transparent", border_width=1,
                        command=open_bluetooth_settings).pack(side="left", padx=2)
 
+        # ── Windows Dynamic Lighting (experimental) ──
+        dc = _card("Windows Dynamic Lighting (experimental)")
+        self.dynlight_status_lbl = ctk.CTkLabel(
+            dc, text="Dynamic Lighting: ...", text_color=MUTED,
+            font=ctk.CTkFont(size=12, weight="bold"), wraplength=650)
+        self.dynlight_status_lbl.pack(anchor="w", pady=(0, 4))
+        self._dynlight_var = ctk.BooleanVar(value=self.cfg.dynlight_enabled)
+        ctk.CTkCheckBox(dc, text="Mirror strip color to PC lighting (motherboard / RAM / keyboard / mouse)",
+                        variable=self._dynlight_var, corner_radius=R_SMALL,
+                        command=self._dynlight_toggled).pack(anchor="w", pady=2)
+        drow = ctk.CTkFrame(dc, fg_color="transparent")
+        drow.pack(fill="x", pady=(4, 0))
+        ctk.CTkButton(drow, text="Refresh", corner_radius=8, width=80,
+                       command=self._dynlight_refresh).pack(side="left", padx=2)
+        ctk.CTkLabel(drow, text="Takes over the same devices Windows Settings > Dynamic Lighting controls.",
+                     text_color=MUTED, font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
+        self._dynlight_status_update()
+
         # ── Startup actions ──
         ac = _card("After launch")
         _toggle(ac, "Auto-connect remembered devices", self.cfg.auto_connect,
@@ -2795,6 +2868,161 @@ class App(ctk.CTk):
         ctk.CTkButton(crow, text="Save now", corner_radius=8, width=100,
                        command=self._save_all).pack(side="left", padx=2)
         return f
+
+    def _dynlight_toggled(self):
+        try:
+            on = bool(self._dynlight_var.get())
+            self.cfg.dynlight_enabled = on
+            self._save_keys({"dynlight_enabled": on})
+            self.dynlight.enabled = on
+            if on:
+                self.dynlight.request_refresh()
+                self._log("Dynamic Lighting mirror ON — scanning for PC lamps ...")
+                self.after(6000, self._dynlight_status_update)
+            else:
+                self._log("Dynamic Lighting mirror OFF.")
+            self._mark_dirty("settings")
+            self._dynlight_status_update()
+        except Exception as e:
+            self._log(f"Dynamic Lighting: {e}")
+
+    def _dynlight_refresh(self):
+        try:
+            self.dynlight.request_refresh()
+            self._log("Dynamic Lighting: rescanning ...")
+            self.after(6000, self._dynlight_status_update)
+            self._dynlight_status_update()
+        except Exception as e:
+            self._log(f"Dynamic Lighting: {e}")
+
+    def _dynlight_status_update(self):
+        try:
+            from dynlight import winrt_available
+            if not winrt_available():
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: unavailable (WinRT LampArray API not installed)",
+                    text_color=MUTED)
+                return
+            s = self.dynlight.snapshot()
+            if s["lamps"] > 0:
+                devs = ", ".join(s["devices"][:4])
+                if len(s["devices"]) > 4:
+                    devs += f" +{len(s['devices']) - 4} more"
+                self.dynlight_status_lbl.configure(
+                    text=f"Dynamic Lighting: {s['lamps']} lamp(s) — {devs}",
+                    text_color=GREEN)
+            elif s["error"]:
+                self.dynlight_status_lbl.configure(
+                    text=f"Dynamic Lighting: {s['error']}", text_color=YELLOW)
+            else:
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: no PC lamps found (check Windows Settings > Dynamic Lighting)",
+                    text_color=MUTED)
+        except Exception:
+            pass
+
+    def _dynlight_toggled(self):
+        try:
+            on = bool(self._dynlight_var.get())
+            self.cfg.dynlight_enabled = on
+            self._save_keys({"dynlight_enabled": on})
+            self.dynlight.enabled = on
+            if on:
+                self.dynlight.request_refresh()
+                self._log("Dynamic Lighting mirror ON — scanning for PC lamps ...")
+                self.after(6000, self._dynlight_status_update)
+            else:
+                self._log("Dynamic Lighting mirror OFF.")
+            self._mark_dirty("settings")
+            self._dynlight_status_update()
+        except Exception as e:
+            self._log(f"Dynamic Lighting: {e}")
+
+    def _dynlight_refresh(self):
+        try:
+            self.dynlight.request_refresh()
+            self._log("Dynamic Lighting: rescanning ...")
+            self.after(6000, self._dynlight_status_update)
+            self._dynlight_status_update()
+        except Exception as e:
+            self._log(f"Dynamic Lighting: {e}")
+
+    def _dynlight_status_update(self):
+        try:
+            from dynlight import winrt_available
+            if not winrt_available():
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: unavailable (WinRT LampArray API not installed)",
+                    text_color=MUTED)
+                return
+            s = self.dynlight.snapshot()
+            if s["lamps"] > 0:
+                devs = ", ".join(s["devices"][:4])
+                if len(s["devices"]) > 4:
+                    devs += f" +{len(s['devices']) - 4} more"
+                self.dynlight_status_lbl.configure(
+                    text=f"Dynamic Lighting: {s['lamps']} lamp(s) — {devs}",
+                    text_color=GREEN)
+            elif s["error"]:
+                self.dynlight_status_lbl.configure(
+                    text=f"Dynamic Lighting: {s['error']}", text_color=YELLOW)
+            else:
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: no PC lamps found (check Windows Settings > Dynamic Lighting)",
+                    text_color=MUTED)
+        except Exception:
+            pass
+
+    def _dynlight_toggled(self):
+        try:
+            on = bool(self._dynlight_var.get())
+            self.cfg.dynlight_enabled = on
+            self._save_keys({"dynlight_enabled": on})
+            self.dynlight.enabled = on
+            if on:
+                self.dynlight.request_refresh()
+                self._log("Dynamic Lighting mirror ON.")
+                self.after(6000, self._dynlight_status_update)
+            else:
+                self._log("Dynamic Lighting mirror OFF.")
+            self._dynlight_status_update()
+        except Exception as e:
+            self._log(f"Dynamic Lighting: {e}")
+
+    def _dynlight_refresh(self):
+        try:
+            self.dynlight.request_refresh()
+            self._log("Dynamic Lighting: rescanning ...")
+            self.after(6000, self._dynlight_status_update)
+            self._dynlight_status_update()
+        except Exception as e:
+            self._log(f"Dynamic Lighting: {e}")
+
+    def _dynlight_status_update(self):
+        try:
+            from dynlight import winrt_available
+            if not winrt_available():
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: unavailable (WinRT API not installed)",
+                    text_color=MUTED)
+                return
+            s = self.dynlight.snapshot()
+            if s["lamps"] > 0:
+                devs = ", ".join(s["devices"][:4])
+                if len(s["devices"]) > 4:
+                    devs += " +%d more" % (len(s["devices"]) - 4)
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: %d lamp(s) - %s" % (s["lamps"], devs),
+                    text_color=GREEN)
+            elif s["error"]:
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: " + s["error"], text_color=YELLOW)
+            else:
+                self.dynlight_status_lbl.configure(
+                    text="Dynamic Lighting: no PC lamps found",
+                    text_color=MUTED)
+        except Exception:
+            pass
 
     def _refresh_startup_cmd(self):
         try:

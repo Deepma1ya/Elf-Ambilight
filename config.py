@@ -106,6 +106,9 @@ class Config:
     ambi_crossfade: bool = True
     ambi_use_dxcam: bool = True  # GPU ~15ms full; mss ~50ms but no flicker on old Windows
 
+    # Windows Dynamic Lighting mirror (experimental, off by default)
+    dynlight_enabled: bool = False
+
     # timers
     t1_hour: int = 7
     t1_min: int = 0

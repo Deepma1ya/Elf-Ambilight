@@ -54,6 +54,8 @@ class Ambilight:
         self.update_interval = max(0.01, min(5.0, update_interval))
         self.crossfade = bool(crossfade)
         self.sample_hz = max(1.0, min(15.0, sample_hz))
+        # optional Windows Dynamic Lighting mirror (DynLight, never blocks)
+        self.dynlight = None
         # latest sampled screen colour (written by sampler thread, read by loop)
         self._sampled_target: tuple[int, int, int] = (0, 0, 0)
         self._sampler_thread: threading.Thread | None = None
@@ -529,6 +531,11 @@ class Ambilight:
                             self.sends += 1
                             self._last_sent = cur
                             self.last_send = time.monotonic()
+                            try:
+                                if self.dynlight is not None:
+                                    self.dynlight.push(*cur)
+                            except Exception:
+                                pass
                 else:
                     # ── direct: instant jump, throttled by update_interval ──
                     cur = (sr, sg, sb)
@@ -549,6 +556,11 @@ class Ambilight:
                             self.last_send = time.monotonic()
                             self._fade_target = cur
                             self._fade_t0 = now
+                            try:
+                                if self.dynlight is not None:
+                                    self.dynlight.push(*cur)
+                            except Exception:
+                                pass
             except asyncio.CancelledError:
                 break
             except Exception:
