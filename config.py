@@ -95,16 +95,16 @@ class Config:
     # action: "power_on" | "power_off" | "color" | "mode"
     schedules: list[dict] = field(default_factory=list)
 
-    # ambilight
-    ambi_fps: float = 30.0
-    ambi_smooth: float = 0.35
+    # ambilight — tuned for minimal GPU/CPU, same functionality
+    ambi_fps: float = 20.0  # was 30 — 33% fewer captures, still smooth with crossfade
+    ambi_smooth: float = 0.25  # slightly smoother default
     ambi_brightness: int = 100
-    ambi_min_delta: int = 6
-    ambi_mode: str = "center"  # "center" or "full" — both 60fps via low-res
-    ambi_sample: str = "average"  # average | dominant | vibrant | brightest
-    ambi_interval: float = 0.1  # fade window / update every (s), now 0.01-2.0
-    ambi_crossfade: bool = True  # smooth fade at FPS rate vs instant jump
-    ambi_use_dxcam: bool = True  # DXGI Desktop Duplication (GPU, ~15ms) vs mss (CPU, ~50ms full)
+    ambi_min_delta: int = 8  # was 6 — fewer BLE writes for tiny changes
+    ambi_mode: str = "center"  # center is ~30% cheaper than full (1/4 pixels)
+    ambi_sample: str = "average"  # average is cheapest; vibrant/dominant cost same now but average a bit cheaper
+    ambi_interval: float = 0.12  # a touch longer than 0.1 — fewer target updates
+    ambi_crossfade: bool = True
+    ambi_use_dxcam: bool = True  # GPU ~15ms full; mss ~50ms but no flicker on old Windows
 
     # timers
     t1_hour: int = 7
