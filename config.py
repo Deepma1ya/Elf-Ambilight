@@ -100,10 +100,11 @@ class Config:
     ambi_smooth: float = 0.35
     ambi_brightness: int = 100
     ambi_min_delta: int = 6
-    ambi_mode: str = "center"  # "center" (fast, 60fps ok) | "full" (slower)
+    ambi_mode: str = "center"  # "center" or "full" — both 60fps via low-res
     ambi_sample: str = "average"  # average | dominant | vibrant | brightest
-    ambi_interval: float = 0.1  # min seconds between strip updates (also fade duration when crossfade on)
+    ambi_interval: float = 0.1  # fade window / update every (s), now 0.01-2.0
     ambi_crossfade: bool = True  # smooth fade at FPS rate vs instant jump
+    ambi_use_dxcam: bool = True  # DXGI Desktop Duplication (GPU, ~15ms) vs mss (CPU, ~50ms full)
 
     # timers
     t1_hour: int = 7
@@ -264,13 +265,17 @@ class Config:
                 except Exception:
                     c.ambi_fps = 30.0
                 try:
-                    c.ambi_interval = max(0.02, min(5.0, float(c.ambi_interval)))
+                    c.ambi_interval = max(0.01, min(5.0, float(c.ambi_interval)))
                 except Exception:
                     c.ambi_interval = 0.1
                 try:
                     c.ambi_crossfade = bool(c.ambi_crossfade)
                 except Exception:
                     c.ambi_crossfade = True
+                try:
+                    c.ambi_use_dxcam = bool(c.ambi_use_dxcam)
+                except Exception:
+                    c.ambi_use_dxcam = True
                 return c
         except Exception:
             pass

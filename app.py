@@ -163,7 +163,8 @@ class App(ctk.CTk):
         self._tray = None
         self.found: dict[str, FoundDevice] = {}
         self.ambilight = Ambilight(self.ble, self._ambi_targets,
-                                   crossfade=self.cfg.ambi_crossfade)
+                                   crossfade=self.cfg.ambi_crossfade,
+                                   use_dxcam=self.cfg.ambi_use_dxcam)
         self.ambilight.calibrate = self.cfg.cal_apply
         self._color = (self.cfg.last_r, self.cfg.last_g, self.cfg.last_b)
 
@@ -2030,6 +2031,16 @@ class App(ctk.CTk):
         ctk.CTkLabel(xf, text="ON = fade at FPS rate  \u00b7  OFF = instant jump every interval",
                      text_color=MUTED, font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
 
+        # GPU capture toggle — dxcam is fast but can cause cursor lag on < Win11 24H2
+        gf = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
+        gf.pack(fill="x", pady=(0, 8))
+        self._ambi_dxcam_var = ctk.BooleanVar(value=self.cfg.ambi_use_dxcam)
+        ctk.CTkSwitch(gf, text="GPU capture (dxcam)", variable=self._ambi_dxcam_var,
+                      progress_color=ACCENT, font=ctk.CTkFont(size=11),
+                      command=self._ambi_dxcam_toggled).pack(side="left", padx=8)
+        ctk.CTkLabel(gf, text="ON = ~15 ms full 60fps  \u00b7  OFF = mss ~50 ms (no flicker on old Windows)",
+                     text_color=MUTED, font=ctk.CTkFont(size=10)).pack(side="left", padx=8)
+
         grid = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         grid.pack(fill="x")
         self._ambi_vars: dict[str, ctk.DoubleVar] = {}
@@ -2041,7 +2052,7 @@ class App(ctk.CTk):
             ("Smoothing", "smooth", 0.01, 1.0),
             ("Brightness", "brightness", 1, 100),
             ("Min Delta", "min_delta", 0, 30),
-            ("Update / Fade (s)", "interval", 0.05, 2.0),
+            ("Update / Fade (s)", "interval", 0.02, 2.0),
         ]):
             row = ctk.CTkFrame(grid, fg_color="transparent")
             row.pack(fill="x", pady=3)
@@ -2141,6 +2152,18 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+    def _ambi_dxcam_toggled(self):
+        try:
+            self.cfg.ambi_use_dxcam = bool(self._ambi_dxcam_var.get())
+            self.ambilight.use_dxcam = self.cfg.ambi_use_dxcam
+            # need to restart capture if running so new backend takes effect
+            if self.ambilight.running:
+                self._log("Restart ambilight to apply GPU capture change.")
+            self._mark_dirty("ambi")
+            self._log("GPU capture " + ("ON (dxcam ~15ms full 60fps)." if self.cfg.ambi_use_dxcam else "OFF (mss, no flicker)."))
+        except Exception:
+            pass
+
     def _ambi_refresh(self, save: bool = True):
         for k, lbl in self._ambi_lbls.items():
             v = self._ambi_vars[k].get()
@@ -2152,10 +2175,15 @@ class App(ctk.CTk):
             self.cfg.ambi_min_delta = int(self._ambi_vars["min_delta"].get())
             self.cfg.ambi_mode = self._ambi_mode()
             self.cfg.ambi_sample = self._ambi_sample()
-            self.cfg.ambi_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
+            self.cfg.ambi_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
             try:
                 self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
                 self.ambilight.crossfade = self.cfg.ambi_crossfade
+            except Exception:
+                pass
+            try:
+                self.cfg.ambi_use_dxcam = bool(self._ambi_dxcam_var.get())
+                self.ambilight.use_dxcam = self.cfg.ambi_use_dxcam
             except Exception:
                 pass
             self._mark_dirty("ambi")
@@ -2181,9 +2209,13 @@ class App(ctk.CTk):
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
-        self.ambilight.update_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
+        self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
         try:
             self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
+        except Exception:
+            pass
+        try:
+            self.ambilight.use_dxcam = bool(self._ambi_dxcam_var.get())
         except Exception:
             pass
         try:
@@ -2239,7 +2271,12 @@ class App(ctk.CTk):
         self.ambilight.min_delta = int(self._ambi_vars["min_delta"].get())
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
-        self.ambilight.update_interval = max(0.02, min(5.0, float(self._ambi_vars["interval"].get())))
+        self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
+        try:
+            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
+            self.ambilight.use_dxcam = bool(self._ambi_dxcam_var.get())
+        except Exception:
+            pass
         try:
             self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
         except Exception:

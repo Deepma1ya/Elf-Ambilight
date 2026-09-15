@@ -24,7 +24,7 @@ class Ambilight:
     def __init__(self, ble, get_targets, fps: float = 30.0, smooth: float = 0.35,
                  min_delta: int = 6, brightness: int = 100,
                  capture_mode: str = "center", update_interval: float = 0.1,
-                 crossfade: bool = True):
+                 crossfade: bool = True, use_dxcam: bool = True):
         """
         ble: ElfBLE instance
         get_targets: callable() -> list[str] (connected MACs to drive)
@@ -47,8 +47,9 @@ class Ambilight:
         self.brightness = max(1, min(100, brightness))
         self.capture_mode = capture_mode if capture_mode in ("center", "full") else "center"
         self.sample_mode = "average"  # average | dominant | vibrant | brightest
-        self.update_interval = max(0.02, min(5.0, update_interval))
+        self.update_interval = max(0.01, min(5.0, update_interval))
         self.crossfade = bool(crossfade)
+        self.use_dxcam = bool(use_dxcam)
         self.last_stats: dict[str, tuple[int, int, int]] = {}
         self._task: asyncio.Task | None = None
         self._running = False
@@ -304,8 +305,9 @@ class Ambilight:
         sct = self._thread_sct()
         box = self._capture_box(sct)
         # high-FPS GPU path: dxcam Desktop Duplication (~12-16 ms for full 1440p → 60fps)
-        # mss fallback is ~50 ms for full 1440p, ~25 ms for center — dxcam avoids cursor flicker
-        if self.fps >= 30:
+        # disabled if user sees cursor flicker (WGC/DXGI forces software cursor on < Win11 24H2)
+        # mss fallback is ~50 ms full, ~25 ms center and never flickers (SRCCOPY without CAPTUREBLT)
+        if self.use_dxcam and self.fps >= 30:
             try:
                 cam = self._thread_dxcam(box)
                 if cam is not None:
