@@ -353,7 +353,7 @@ class App(ctk.CTk):
         self._tray = None
         self.found: dict[str, FoundDevice] = {}
         self.ambilight = Ambilight(self.ble, self._ambi_targets,
-                                   crossfade=self.cfg.ambi_crossfade,
+                                   crossfade=True,
                                    use_dxcam=self.cfg.ambi_use_dxcam)
         self.ambilight.calibrate = self.cfg.cal_apply
         self._color = (self.cfg.last_r, self.cfg.last_g, self.cfg.last_b)
@@ -2341,14 +2341,10 @@ class App(ctk.CTk):
             sw.pack()
             self._cand_sw[key] = sw
 
-        # Smooth vs instant toggle
+        # Crossfade always on — slider controls speed
         xf = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         xf.pack(fill="x", pady=(0, 8))
-        self._ambi_crossfade_var = ctk.BooleanVar(value=self.cfg.ambi_crossfade)
-        ctk.CTkSwitch(xf, text="Smooth crossfade", variable=self._ambi_crossfade_var,
-                      progress_color=ACCENT, font=ctk.CTkFont(size=12, weight="bold"),
-                      command=self._ambi_crossfade_toggled).pack(side="left", padx=8)
-        ctk.CTkLabel(xf, text="ON = fade at FPS rate  \u00b7  OFF = instant jump every interval",
+        ctk.CTkLabel(xf, text="Crossfade: always on  \u00b7  left = instant  \u00b7  right = slow/smooth",
                      text_color=MUTED, font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
 
         # GPU capture toggle — dxcam is fast but can cause cursor lag on < Win11 24H2
@@ -2392,12 +2388,10 @@ class App(ctk.CTk):
         # hint for Smoothing
         ctk.CTkLabel(grid, text="Crossfade: left = instant  \u00b7  right = slow/smooth  \u00b7  try 0.02–0.35",
                      text_color=MUTED, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=8, pady=(2, 0))
-        # sync crossfade UI (interval label + smoothing enable)
+        # crossfade always on — slider always enabled
         try:
-            on = self.cfg.ambi_crossfade
-            self._ambi_row_lbls["interval"].configure(text="Fade window (s)" if on else "Update every (s)")
-            self._ambi_sliders["smooth"].configure(state="normal" if on else "disabled")
-            self._ambi_row_lbls["smooth"].configure(text_color=MUTED if on else "#3a3a4a")
+            self._ambi_sliders["smooth"].configure(state="normal")
+            self._ambi_row_lbls["smooth"].configure(text_color=MUTED)
         except Exception:
             pass
 
@@ -2410,14 +2404,14 @@ class App(ctk.CTk):
             return "center"
 
     AMBI_PRESETS = {
-        "Movie": {"fps": 30, "smooth": 0.25, "brightness": 80, "min_delta": 8,
-                  "interval": 0.80, "mode": "center", "sample": "average", "crossfade": True},
-        "Game": {"fps": 60, "smooth": 0.60, "brightness": 100, "min_delta": 3,
-                 "interval": 0.05, "mode": "center", "sample": "vibrant", "crossfade": False},
-        "Chill": {"fps": 15, "smooth": 0.15, "brightness": 60, "min_delta": 10,
-                  "interval": 1.00, "mode": "center", "sample": "average", "crossfade": True},
-        "Party": {"fps": 30, "smooth": 0.35, "brightness": 100, "min_delta": 2,
-                  "interval": 0.30, "mode": "center", "sample": "brightest", "crossfade": True},
+        "Movie": {"fps": 30, "smooth": 0.10, "brightness": 80, "min_delta": 8,
+                  "interval": 0.80, "mode": "center", "sample": "average"},
+        "Game": {"fps": 60, "smooth": 0.50, "brightness": 100, "min_delta": 3,
+                 "interval": 0.05, "mode": "center", "sample": "vibrant"},
+        "Chill": {"fps": 15, "smooth": 0.05, "brightness": 60, "min_delta": 10,
+                  "interval": 1.00, "mode": "center", "sample": "average"},
+        "Party": {"fps": 30, "smooth": 0.15, "brightness": 100, "min_delta": 2,
+                  "interval": 0.30, "mode": "center", "sample": "brightest"},
     }
 
     def _ambi_preset(self, name: str):
@@ -2431,18 +2425,6 @@ class App(ctk.CTk):
         self._ambi_vars["interval"].set(p["interval"])
         self._ambi_mode_var.set("Center 50% (fast)" if p["mode"] == "center" else "Full screen (slow)")
         self._ambi_sample_var.set(str(p["sample"]).capitalize())
-        if "crossfade" in p:
-            self._ambi_crossfade_var.set(bool(p["crossfade"]))
-        # sync crossfade UI immediately
-        try:
-            on = bool(self._ambi_crossfade_var.get())
-            if hasattr(self, "_ambi_row_lbls"):
-                self._ambi_row_lbls["interval"].configure(text="Fade window (s)" if on else "Update every (s)")
-                self._ambi_row_lbls["smooth"].configure(text_color=MUTED if on else "#3a3a4a")
-            if hasattr(self, "_ambi_sliders"):
-                self._ambi_sliders["smooth"].configure(state="normal" if on else "disabled")
-        except Exception:
-            pass
         self._ambi_refresh()
         self._log(f"Ambilight preset '{name}' staged (unsaved).")
 
@@ -2452,25 +2434,6 @@ class App(ctk.CTk):
             return s if s in ("average", "dominant", "vibrant", "brightest") else "average"
         except Exception:
             return "average"
-
-    def _ambi_crossfade_toggled(self):
-        try:
-            self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
-            self.ambilight.crossfade = self.cfg.ambi_crossfade
-            # UI: interval label + smoothing enable
-            try:
-                on = self.cfg.ambi_crossfade
-                if hasattr(self, "_ambi_row_lbls") and "interval" in self._ambi_row_lbls:
-                    self._ambi_row_lbls["interval"].configure(text="Fade window (s)" if on else "Update every (s)")
-                if hasattr(self, "_ambi_sliders") and "smooth" in self._ambi_sliders:
-                    self._ambi_sliders["smooth"].configure(state="normal" if on else "disabled")
-                    self._ambi_row_lbls["smooth"].configure(text_color=MUTED if on else "#3a3a4a")
-            except Exception:
-                pass
-            self._mark_dirty("ambi")
-            self._log("Ambilight " + ("smooth fade ON." if self.cfg.ambi_crossfade else "direct jump ON."))
-        except Exception:
-            pass
 
     def _ambi_dxcam_toggled(self):
         try:
@@ -2496,11 +2459,8 @@ class App(ctk.CTk):
             self.cfg.ambi_mode = self._ambi_mode()
             self.cfg.ambi_sample = self._ambi_sample()
             self.cfg.ambi_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
-            try:
-                self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
-                self.ambilight.crossfade = self.cfg.ambi_crossfade
-            except Exception:
-                pass
+            self.cfg.ambi_crossfade = True
+            self.ambilight.crossfade = True
             try:
                 self.cfg.ambi_use_dxcam = bool(self._ambi_dxcam_var.get())
                 self.ambilight.use_dxcam = self.cfg.ambi_use_dxcam
@@ -2530,10 +2490,7 @@ class App(ctk.CTk):
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
-        try:
-            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
-        except Exception:
-            pass
+        self.ambilight.crossfade = True
         try:
             self.ambilight.use_dxcam = bool(self._ambi_dxcam_var.get())
         except Exception:
@@ -2592,13 +2549,9 @@ class App(ctk.CTk):
         self.ambilight.capture_mode = self._ambi_mode()
         self.ambilight.sample_mode = self._ambi_sample()
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
+        self.ambilight.crossfade = True
         try:
-            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
             self.ambilight.use_dxcam = bool(self._ambi_dxcam_var.get())
-        except Exception:
-            pass
-        try:
-            self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
         except Exception:
             pass
         try:

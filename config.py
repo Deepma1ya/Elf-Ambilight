@@ -97,7 +97,7 @@ class Config:
 
     # ambilight — tuned for minimal GPU/CPU, same functionality
     ambi_fps: float = 20.0  # was 30 — 33% fewer captures, still smooth with crossfade
-    ambi_smooth: float = 0.25  # slightly smoother default
+    ambi_smooth: float = 0.12  # crossfade speed: 1.0=instant, 0.01=ultra-slow silky
     ambi_brightness: int = 100
     ambi_min_delta: int = 8  # was 6 — fewer BLE writes for tiny changes
     ambi_mode: str = "center"  # center is ~30% cheaper than full (1/4 pixels)
