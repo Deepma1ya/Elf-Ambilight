@@ -81,6 +81,9 @@ MUTED = "#94A3B8"       # --color-muted-foreground
 MUTED_DIM = "#64748b"
 ENTRY_BG = "#0d1017"
 SURFACE = "#131B2F"     # --color-muted
+SIDEBAR_BG = "#111B2F"  # --color-sidebar
+SIDEBAR_BTN = "#1a2744" # --color-sidebar-button
+SIDEBAR_BTN_HOVER = "#243656"
 
 # Spacing & radius — consistent 8dp scale, everything rounded
 PAD = 16                # base padding (was 12)
@@ -95,6 +98,18 @@ R_PILL = 20             # pills, dots
 DURATION_FAST = 150
 DURATION_NORMAL = 220
 EASE = "ease-out"
+
+# Type scale — single source of truth (dark-mode-oled: min 10px readable)
+F_TITLE = 20    # page titles, bold
+F_SECTION = 13  # card/section headings, bold
+F_BODY = 12     # body text, buttons
+F_CAPTION = 11  # hints, secondary labels
+F_MICRO = 10    # smallest readable (status dots, tiny labels — never below)
+
+
+def F(size: int, weight: str = "normal"):  # font helper — F(F_TITLE, "bold")
+    import customtkinter as _ctk
+    return _ctk.CTkFont(size=size, weight="bold" if weight == "bold" else "normal")
 
 
 # ── Async runner ───────────────────────────────────────────────────────
@@ -420,16 +435,16 @@ class App(ctk.CTk):
     # ── Sidebar — high-contrast, readable nav ─────────────────
     def _build_sidebar(self):
         # lighter sidebar for better contrast with white text (was #0B1222 too dark)
-        sb = ctk.CTkFrame(self, width=92, fg_color="#111B2F", corner_radius=0, border_width=1, border_color="#1e293b")
+        sb = ctk.CTkFrame(self, width=92, fg_color=SIDEBAR_BG, corner_radius=0, border_width=1, border_color=CARD_BORDER)
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
 
         # app mark — larger, crisper
         mark = ctk.CTkFrame(sb, fg_color="transparent")
         mark.pack(fill="x", pady=(16, 12))
-        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=ctk.CTkFont(size=22, weight="bold")).pack()
-        ctk.CTkLabel(mark, text="ELF", text_color="#FFFFFF", font=ctk.CTkFont(size=14, weight="bold")).pack()
-        ctk.CTkLabel(mark, text="AMBILIGHT", text_color="#94A3B8", font=ctk.CTkFont(size=10, weight="bold")).pack()
+        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=F(22, "bold")).pack()
+        ctk.CTkLabel(mark, text="ELF", text_color=FG, font=F(14, "bold")).pack()
+        ctk.CTkLabel(mark, text="AMBILIGHT", text_color=MUTED, font=F(F_MICRO, "bold")).pack()
 
         self._page_btns: dict[str, ctk.CTkButton] = {}
         self._page_indicators: dict[str, ctk.CTkFrame] = {}
@@ -451,10 +466,10 @@ class App(ctk.CTk):
             self._page_indicators[key] = ind
             b = ctk.CTkButton(
                 row, text=label, width=70, height=38, corner_radius=R_BUTTON,
-                fg_color="#1a2744", hover_color="#243656",  # subtle solid bg so text always pops
-                text_color="#FFFFFF",  # pure white — max contrast on dark
+                fg_color=SIDEBAR_BTN, hover_color=SIDEBAR_BTN_HOVER,  # subtle solid bg so text always pops
+                text_color=FG,  # max contrast on dark
                 anchor="w",
-                font=ctk.CTkFont(size=13, weight="bold"),
+                font=F(F_SECTION, "bold"),
                 command=lambda k=key: self._show_page(k),
             )
             b.pack(side="left", fill="x", expand=True)
@@ -473,9 +488,9 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=16, weight="bold"),
         )
         self.conn_label.pack()
-        ctk.CTkLabel(info, text="connected", text_color=MUTED, font=ctk.CTkFont(size=8)).pack(pady=(0, 4))
+        ctk.CTkLabel(info, text="connected", text_color=MUTED, font=F(F_MICRO)).pack(pady=(0, 4))
         self.bt_dot = ctk.CTkLabel(info, text="BT?", text_color=MUTED,
-                                   font=ctk.CTkFont(size=10, weight="bold"))
+                                   font=F(F_MICRO, "bold"))
         self.bt_dot.pack(pady=(0, 8))
 
         # power + save — pill, equal spacing, 8dp
@@ -495,7 +510,7 @@ class App(ctk.CTk):
         ).pack(fill="x", pady=2)
         self.save_btn = ctk.CTkButton(
             sb, height=36, corner_radius=R_PILL,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=FG,
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._save_all,
         )
@@ -521,9 +536,9 @@ class App(ctk.CTk):
     def _animate_sidebar(self, active: str):
         for k, b in self._page_btns.items():
             is_active = k == active
-            b.configure(fg_color=ACCENT if is_active else "#1a2744",
-                        text_color="#FFFFFF",
-                        hover_color=ACCENT_HOVER if is_active else "#243656")
+            b.configure(fg_color=ACCENT if is_active else SIDEBAR_BTN,
+                        text_color=FG,
+                        hover_color=ACCENT_HOVER if is_active else SIDEBAR_BTN_HOVER)
             ind = self._page_indicators.get(k)
             if ind is not None:
                 ind.configure(fg_color=ACCENT if is_active else "transparent")
@@ -1189,7 +1204,7 @@ class App(ctk.CTk):
             name = self.cfg.names.get(addr, self.found.get(addr, FoundDevice("", addr)).name)
             connected = self.ble.is_connected(addr)
             row = ctk.CTkFrame(self.dev_frame, fg_color=CARD_HOVER if connected else "transparent",
-                                corner_radius=6, height=32)
+                                corner_radius=R_SMALL, height=32)
             row.pack(fill="x", pady=1)
             row.pack_propagate(False)
             ctk.CTkLabel(row, text="\u25cf" if connected else "\u25cb",
@@ -1392,7 +1407,7 @@ class App(ctk.CTk):
 
         # Live toggle + Send button
         self.live_var = ctk.BooleanVar(value=self.cfg.live_send)
-        ctk.CTkCheckBox(top, text="Live", variable=self.live_var, corner_radius=4,
+        ctk.CTkCheckBox(top, text="Live", variable=self.live_var, corner_radius=R_SMALL,
                          font=ctk.CTkFont(size=12),
                          command=self._live_toggled).pack(side="right", padx=4)
         ctk.CTkButton(top, text="Send", corner_radius=8, width=80,
@@ -1432,7 +1447,7 @@ class App(ctk.CTk):
         self._wheel_hex.pack(pady=2)
         self._wheel_preview = ctk.CTkLabel(winfo, text="", width=64, height=64, fg_color=rgb_hex(*self._color), corner_radius=R_SMALL)
         self._wheel_preview.pack(pady=6)
-        ctk.CTkLabel(winfo, text="Hue = angle · Sat = distance", text_color=MUTED, font=ctk.CTkFont(size=9)).pack(pady=(0, 12), padx=8)
+        ctk.CTkLabel(winfo, text="Hue = angle · Sat = distance", text_color=MUTED, font=F(F_MICRO)).pack(pady=(0, 12), padx=8)
 
         # HSL sliders
         hsl = ctk.CTkFrame(body, fg_color=CARD, corner_radius=R_CARD, border_width=1, border_color=CARD_BORDER)
@@ -1491,7 +1506,7 @@ class App(ctk.CTk):
         ]
         for name, r, g, b in presets:
             ctk.CTkButton(
-                prow, text="", width=30, height=24, corner_radius=6,
+                prow, text="", width=30, height=24, corner_radius=R_SMALL,
                 fg_color=rgb_hex(r, g, b), hover_color=rgb_hex(r, g, b),
                 command=lambda r=r, g=g, b=b: self._set_color(r, g, b),
             ).pack(side="left", padx=2, pady=2)
@@ -1549,9 +1564,9 @@ class App(ctk.CTk):
         self.rgb_on = ctk.BooleanVar(value=True)
         self.w_on = ctk.BooleanVar(value=True)
         self.cct_on = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(c_row, text="RGB", variable=self.rgb_on, corner_radius=4).pack(side="left", padx=6)
-        ctk.CTkCheckBox(c_row, text="W", variable=self.w_on, corner_radius=4).pack(side="left", padx=6)
-        ctk.CTkCheckBox(c_row, text="CCT", variable=self.cct_on, corner_radius=4).pack(side="left", padx=6)
+        ctk.CTkCheckBox(c_row, text="RGB", variable=self.rgb_on, corner_radius=R_SMALL).pack(side="left", padx=6)
+        ctk.CTkCheckBox(c_row, text="W", variable=self.w_on, corner_radius=R_SMALL).pack(side="left", padx=6)
+        ctk.CTkCheckBox(c_row, text="CCT", variable=self.cct_on, corner_radius=R_SMALL).pack(side="left", padx=6)
         ctk.CTkButton(c_row, text="Send state", corner_radius=8, width=80,
                        command=self._send_rgbw).pack(side="left", padx=8)
         ctk.CTkLabel(c_row, text="Pins", text_color=MUTED).pack(side="left", padx=(12, 4))
@@ -1559,7 +1574,7 @@ class App(ctk.CTk):
         self.p2 = ctk.IntVar(value=2)
         self.p3 = ctk.IntVar(value=3)
         for v in (self.p1, self.p2, self.p3):
-            ctk.CTkEntry(c_row, width=40, textvariable=v, corner_radius=6).pack(side="left", padx=2)
+            ctk.CTkEntry(c_row, width=40, textvariable=v, corner_radius=R_SMALL).pack(side="left", padx=2)
         ctk.CTkButton(c_row, text="Pins", corner_radius=8, width=50,
                        command=self._send_pins).pack(side="left", padx=4)
 
@@ -1732,7 +1747,7 @@ class App(ctk.CTk):
         for c in self.cfg.recent_colors[:16]:
             r, g, b = c
             ctk.CTkButton(
-                self.recent_frame, text="", width=24, height=20, corner_radius=4,
+                self.recent_frame, text="", width=24, height=20, corner_radius=R_SMALL,
                 fg_color=rgb_hex(r, g, b), hover_color=rgb_hex(r, g, b),
                 command=lambda r=r, g=g, b=b: self._set_color(r, g, b),
             ).pack(side="left", padx=2, pady=2)
@@ -1755,7 +1770,7 @@ class App(ctk.CTk):
 
         self.cal_en = ctk.BooleanVar(value=self.cfg.cal_enabled)
         ctk.CTkCheckBox(card, text="Calibration enabled", variable=self.cal_en,
-                         corner_radius=4, command=self._cal_changed).pack(anchor="w", pady=(0, 8))
+                         corner_radius=R_SMALL, command=self._cal_changed).pack(anchor="w", pady=(0, 8))
         ctk.CTkButton(card, text="Reset", corner_radius=8, width=60,
                        fg_color="#443333", command=self._cal_reset).pack(anchor="e")
         trow = ctk.CTkFrame(card, fg_color="transparent")
@@ -1829,7 +1844,7 @@ class App(ctk.CTk):
                           font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
             cur = list(getattr(self.cfg, attr))
             sw = ctk.CTkLabel(head, text="", width=56, height=24,
-                              fg_color=rgb_hex(*cur), corner_radius=6)
+                              fg_color=rgb_hex(*cur), corner_radius=R_SMALL)
             sw.pack(side="left", padx=6)
             hx = ctk.CTkLabel(head, text=rgb_hex(*cur), width=70,
                               font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
@@ -1884,7 +1899,7 @@ class App(ctk.CTk):
             ("Yellow", (255, 220, 0)), ("Cyan", (0, 220, 220)), ("Purple", (170, 60, 255)),
         ]:
             b = ctk.CTkButton(
-                trow, text="", width=34, height=24, corner_radius=6,
+                trow, text="", width=34, height=24, corner_radius=R_SMALL,
                 fg_color=rgb_hex(tr, tg, tb), hover_color=rgb_hex(tr, tg, tb),
                 command=lambda r=tr, g=tg, b=tb: self._cal_test(r, g, b),
             )
@@ -2013,7 +2028,7 @@ class App(ctk.CTk):
                 self.mode_list, text=f"{i:02d}  {m}", anchor="w",
                 fg_color="transparent", hover_color=CARD_HOVER,
                 text_color=FG,
-                font=ctk.CTkFont(size=12), height=30, corner_radius=6,
+                font=ctk.CTkFont(size=12), height=30, corner_radius=R_SMALL,
                 command=lambda idx=i: self._send_mode(idx),
             )
             b.pack(fill="x", pady=1)
@@ -2128,18 +2143,18 @@ class App(ctk.CTk):
             r1 = ctk.CTkFrame(card, fg_color="transparent")
             r1.pack(fill="x")
             en = ctk.BooleanVar(value=s.get("enabled", True))
-            ctk.CTkCheckBox(r1, text="", variable=en, width=24, corner_radius=4,
+            ctk.CTkCheckBox(r1, text="", variable=en, width=24, corner_radius=R_SMALL,
                              command=lambda i=idx, v=en: self._sched_set(i, "enabled", bool(v.get()))
                              ).pack(side="left", padx=(2, 0))
             nm = ctk.StringVar(value=s.get("name", f"Schedule {idx+1}"))
-            ctk.CTkEntry(r1, width=130, textvariable=nm, corner_radius=6,
+            ctk.CTkEntry(r1, width=130, textvariable=nm, corner_radius=R_SMALL,
                          placeholder_text="Name").pack(side="left", padx=4)
             nm.trace_add("write", lambda *a, i=idx, v=nm: self._sched_set(i, "name", v.get()))
             hv = ctk.StringVar(value=str(s.get("hour", 7)))
             mv = ctk.StringVar(value=str(s.get("min", 0)))
-            ctk.CTkEntry(r1, width=36, textvariable=hv, corner_radius=6).pack(side="left")
+            ctk.CTkEntry(r1, width=36, textvariable=hv, corner_radius=R_SMALL).pack(side="left")
             ctk.CTkLabel(r1, text=":", text_color=MUTED).pack(side="left")
-            ctk.CTkEntry(r1, width=36, textvariable=mv, corner_radius=6).pack(side="left", padx=(0, 4))
+            ctk.CTkEntry(r1, width=36, textvariable=mv, corner_radius=R_SMALL).pack(side="left", padx=(0, 4))
             hv.trace_add("write", lambda *a, i=idx, v=hv: self._sched_time(i, "hour", v.get()))
             mv.trace_add("write", lambda *a, i=idx, v=mv: self._sched_time(i, "min", v.get()))
             av = ctk.StringVar(value=self.SCHED_ACTIONS_R.get(s.get("action", "power_on"), "Power ON"))
@@ -2148,7 +2163,7 @@ class App(ctk.CTk):
                               command=lambda _c, i=idx, v=av: self._sched_set(
                                   i, "action", self.SCHED_ACTIONS[v.get()])).pack(side="left", padx=4)
             mdv = ctk.StringVar(value=str(s.get("mode", 10)))
-            ctk.CTkEntry(r1, width=40, textvariable=mdv, corner_radius=6).pack(side="left")
+            ctk.CTkEntry(r1, width=40, textvariable=mdv, corner_radius=R_SMALL).pack(side="left")
             ctk.CTkLabel(r1, text="mode#", text_color=MUTED, font=ctk.CTkFont(size=10)).pack(side="left", padx=(2, 0))
             mdv.trace_add("write", lambda *a, i=idx, v=mdv: self._sched_time(i, "mode", v.get(), lo=0, hi=28))
             ctk.CTkButton(r1, text="✕", corner_radius=8, width=32,
@@ -2158,7 +2173,7 @@ class App(ctk.CTk):
             r2.pack(fill="x", pady=(2, 0))
             for di, dn in enumerate(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]):
                 dv = ctk.BooleanVar(value=bool(s.get("days", [True]*7)[di]))
-                ctk.CTkCheckBox(r2, text=dn, variable=dv, width=40, corner_radius=4,
+                ctk.CTkCheckBox(r2, text=dn, variable=dv, width=40, corner_radius=R_SMALL,
                                  font=ctk.CTkFont(size=10),
                                  command=lambda i=idx, d=di, v=dv: self._sched_day(i, d, bool(v.get()))
                                  ).pack(side="left", padx=1)
@@ -2248,13 +2263,13 @@ class App(ctk.CTk):
         ctk.CTkLabel(row, text=title, font=ctk.CTkFont(size=13, weight="bold"),
                       text_color=FG).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(row, text="H", text_color=MUTED).pack(side="left")
-        ctk.CTkEntry(row, width=40, textvariable=h_var, corner_radius=6).pack(side="left", padx=2)
+        ctk.CTkEntry(row, width=40, textvariable=h_var, corner_radius=R_SMALL).pack(side="left", padx=2)
         ctk.CTkLabel(row, text="M", text_color=MUTED).pack(side="left")
-        ctk.CTkEntry(row, width=40, textvariable=m_var, corner_radius=6).pack(side="left", padx=2)
-        ctk.CTkCheckBox(row, text="ON", variable=on_var, corner_radius=4).pack(side="left", padx=8)
+        ctk.CTkEntry(row, width=40, textvariable=m_var, corner_radius=R_SMALL).pack(side="left", padx=2)
+        ctk.CTkCheckBox(row, text="ON", variable=on_var, corner_radius=R_SMALL).pack(side="left", padx=8)
         for i, nm in enumerate(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]):
             ctk.CTkCheckBox(row, text=nm, variable=days_vars[i], width=36,
-                             corner_radius=4, font=ctk.CTkFont(size=10)).pack(side="left", padx=1)
+                             corner_radius=R_SMALL, font=ctk.CTkFont(size=10)).pack(side="left", padx=1)
         ctk.CTkButton(row, text="Send", corner_radius=8, width=50,
                        command=lambda: self._send_timer(h_var, m_var, on_var, days_vars, slot)).pack(side="left", padx=8)
 
@@ -2304,7 +2319,7 @@ class App(ctk.CTk):
         self.ambi_btn.pack(side="left", padx=4)
         self._ambi_auto_var = ctk.BooleanVar(value=self.cfg.ambi_on_startup)
         ctk.CTkCheckBox(row, text="Start at app startup", variable=self._ambi_auto_var,
-                         corner_radius=4, font=ctk.CTkFont(size=11),
+                         corner_radius=R_SMALL, font=ctk.CTkFont(size=11),
                          command=self._ambi_auto_toggled).pack(side="left", padx=8)
         self._ambi_preview = ctk.CTkLabel(row, text="", width=60, height=36,
                                            fg_color="#000000", corner_radius=8)
@@ -2353,7 +2368,7 @@ class App(ctk.CTk):
             ctk.CTkLabel(box, text=label, text_color=MUTED,
                           font=ctk.CTkFont(size=10)).pack()
             sw = ctk.CTkLabel(box, text="", width=44, height=22,
-                              fg_color="#000000", corner_radius=6)
+                              fg_color="#000000", corner_radius=R_SMALL)
             sw.pack()
             self._cand_sw[key] = sw
 
@@ -2664,7 +2679,7 @@ class App(ctk.CTk):
 
         def _toggle(parent, text, initial, on_change):
             v = ctk.BooleanVar(value=initial)
-            ctk.CTkCheckBox(parent, text=text, variable=v, corner_radius=4,
+            ctk.CTkCheckBox(parent, text=text, variable=v, corner_radius=R_SMALL,
                              command=lambda: on_change(bool(v.get()))).pack(anchor="w", pady=2)
             return v
 
@@ -2672,7 +2687,7 @@ class App(ctk.CTk):
         sc = _card("Windows startup")
         self._startup_var = ctk.BooleanVar(value=startup_enabled())
         ctk.CTkCheckBox(sc, text="Start app with Windows", variable=self._startup_var,
-                         corner_radius=4,
+                         corner_radius=R_SMALL,
                          command=self._startup_toggled).pack(anchor="w", pady=2)
         _toggle(sc, "Start minimized to tray", self.cfg.start_minimized,
                 lambda on: (setattr(self.cfg, "start_minimized", on),
