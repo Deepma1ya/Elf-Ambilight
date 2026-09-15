@@ -159,16 +159,14 @@ class Config:
             out[c] *= (Wp[c] / col_sum) if col_sum > 0 else 1.0
         return out[0], out[1], out[2]
 
-    def cal_apply(self, r: int, g: int, b: int) -> tuple[int, int, int]:
+    def cal_apply(self, r: int, g: int, b: int, *, apply_order: bool = True) -> tuple[int, int, int]:
         if not self.cal_enabled:
             return max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
         rf, gf, bf = self._matrix_apply(r, g, b)
-        ch = {"R": rf, "G": gf, "B": bf}
-        o = self.cal_order.upper() if self.cal_order.upper() in ORDERS else "RGB"
-        r0, g0, b0 = ch[o[0]], ch[o[1]], ch[o[2]]
-        r1 = r0 * max(0.2, min(2.0, self.cal_gain_r))
-        g1 = g0 * max(0.2, min(2.0, self.cal_gain_g))
-        b1 = b0 * max(0.2, min(2.0, self.cal_gain_b))
+        # gains / temp / gamma on logical channels (before wire order)
+        r1 = rf * max(0.2, min(2.0, self.cal_gain_r))
+        g1 = gf * max(0.2, min(2.0, self.cal_gain_g))
+        b1 = bf * max(0.2, min(2.0, self.cal_gain_b))
         t = max(-100, min(100, self.cal_temp)) / 100.0
         if t > 0:
             r1 *= 1.0 + 0.25 * t
@@ -181,9 +179,16 @@ class Config:
             r1 = 255.0 * ((max(0, r1) / 255.0) ** gm)
             g1 = 255.0 * ((max(0, g1) / 255.0) ** gm)
             b1 = 255.0 * ((max(0, b1) / 255.0) ** gm)
+        if not apply_order:
+            def cl(v):
+                return max(0, min(255, int(round(v))))
+            return cl(r1), cl(g1), cl(b1)
+        ch = {"R": r1, "G": g1, "B": b1}
+        o = self.cal_order.upper() if self.cal_order.upper() in ORDERS else "RGB"
+        r0, g0, b0 = ch[o[0]], ch[o[1]], ch[o[2]]
         def cl(v):
             return max(0, min(255, int(round(v))))
-        return cl(r1), cl(g1), cl(b1)
+        return cl(r0), cl(g0), cl(b0)
 
     def save(self):
         try:

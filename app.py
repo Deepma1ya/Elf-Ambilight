@@ -1572,7 +1572,8 @@ class App(ctk.CTk):
 
     def _cal_refresh_preview(self):
         r, g, b = self._color
-        cr, cg, cb = self.cfg.cal_apply(r, g, b)
+        # preview what the eye will see (logical, before wire order)
+        cr, cg, cb = self.cfg.cal_apply(r, g, b, apply_order=False)
         self._prev_req.configure(fg_color=rgb_hex(r, g, b))
         self._prev_out.configure(fg_color=rgb_hex(cr, cg, cb))
         self._prev_txt.configure(text=f"({r},{g},{b}) \u2192 ({cr},{cg},{cb})")
@@ -2026,6 +2027,8 @@ class App(ctk.CTk):
         grid.pack(fill="x")
         self._ambi_vars: dict[str, ctk.DoubleVar] = {}
         self._ambi_lbls: dict[str, ctk.CTkLabel] = {}
+        self._ambi_sliders: dict[str, ctk.CTkSlider] = {}
+        self._ambi_row_lbls: dict[str, ctk.CTkLabel] = {}
         for i, (txt, key, lo, hi) in enumerate([
             ("FPS (1-60)", "fps", 1, 60),
             ("Smoothing", "smooth", 0.05, 1.0),
@@ -2035,15 +2038,30 @@ class App(ctk.CTk):
         ]):
             row = ctk.CTkFrame(grid, fg_color="transparent")
             row.pack(fill="x", pady=3)
-            ctk.CTkLabel(row, text=txt, width=80, text_color=MUTED).pack(side="left")
+            rlbl = ctk.CTkLabel(row, text=txt, width=80, text_color=MUTED)
+            rlbl.pack(side="left")
             var = ctk.DoubleVar(value=getattr(self.cfg, f"ambi_{key}"))
-            ctk.CTkSlider(row, from_=lo, to=hi, variable=var, width=300,
-                           command=lambda _: self._ambi_refresh()).pack(side="left", padx=8, fill="x", expand=True)
+            sld = ctk.CTkSlider(row, from_=lo, to=hi, variable=var, width=300,
+                                command=lambda _: self._ambi_refresh())
+            sld.pack(side="left", padx=8, fill="x", expand=True)
             lbl = ctk.CTkLabel(row, text=f"{var.get():.0f}", width=50,
                                 font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
             lbl.pack(side="left")
             self._ambi_vars[key] = var
             self._ambi_lbls[key] = lbl
+            self._ambi_sliders[key] = sld
+            self._ambi_row_lbls[key] = rlbl
+        # hint for Smoothing
+        ctk.CTkLabel(grid, text="Smoothing: 0.05 = silky slow  \u00b7  1.0 = instant  \u00b7  try 0.15–0.35",
+                     text_color=MUTED, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=8, pady=(2, 0))
+        # sync crossfade UI (interval label + smoothing enable)
+        try:
+            on = self.cfg.ambi_crossfade
+            self._ambi_row_lbls["interval"].configure(text="Fade window (s)" if on else "Update every (s)")
+            self._ambi_sliders["smooth"].configure(state="normal" if on else "disabled")
+            self._ambi_row_lbls["smooth"].configure(text_color=MUTED if on else "#3a3a4a")
+        except Exception:
+            pass
 
         return f
 
@@ -2077,6 +2095,16 @@ class App(ctk.CTk):
         self._ambi_sample_var.set(str(p["sample"]).capitalize())
         if "crossfade" in p:
             self._ambi_crossfade_var.set(bool(p["crossfade"]))
+        # sync crossfade UI immediately
+        try:
+            on = bool(self._ambi_crossfade_var.get())
+            if hasattr(self, "_ambi_row_lbls"):
+                self._ambi_row_lbls["interval"].configure(text="Fade window (s)" if on else "Update every (s)")
+                self._ambi_row_lbls["smooth"].configure(text_color=MUTED if on else "#3a3a4a")
+            if hasattr(self, "_ambi_sliders"):
+                self._ambi_sliders["smooth"].configure(state="normal" if on else "disabled")
+        except Exception:
+            pass
         self._ambi_refresh()
         self._log(f"Ambilight preset '{name}' staged (unsaved).")
 
@@ -2091,6 +2119,16 @@ class App(ctk.CTk):
         try:
             self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
             self.ambilight.crossfade = self.cfg.ambi_crossfade
+            # UI: interval label + smoothing enable
+            try:
+                on = self.cfg.ambi_crossfade
+                if hasattr(self, "_ambi_row_lbls") and "interval" in self._ambi_row_lbls:
+                    self._ambi_row_lbls["interval"].configure(text="Fade window (s)" if on else "Update every (s)")
+                if hasattr(self, "_ambi_sliders") and "smooth" in self._ambi_sliders:
+                    self._ambi_sliders["smooth"].configure(state="normal" if on else "disabled")
+                    self._ambi_row_lbls["smooth"].configure(text_color=MUTED if on else "#3a3a4a")
+            except Exception:
+                pass
             self._mark_dirty("ambi")
             self._log("Ambilight " + ("smooth fade ON." if self.cfg.ambi_crossfade else "direct jump ON."))
         except Exception:

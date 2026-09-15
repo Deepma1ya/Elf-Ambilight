@@ -318,7 +318,8 @@ class Ambilight:
 
                 if self.crossfade:
                     # ── smooth: new target sampled every update_interval,
-                    #    strip fades to it at FPS rate (ease_step) ──
+                    #    strip fades to it at FPS rate (ease_step). Smoothing
+                    #    controls ease speed, interval controls fade window. ──
                     if (now - self._fade_t0) >= self.update_interval:
                         if (abs(sr - self._fade_target[0]) >= 2
                                 or abs(sg - self._fade_target[1]) >= 2
