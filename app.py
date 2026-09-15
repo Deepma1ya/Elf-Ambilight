@@ -60,6 +60,10 @@ def _find_icon_path() -> Optional[str]:
     return None
 
 
+APP_NAME = "Elf-Ambilight"
+APP_VERSION = "1.1.0"
+
+
 # ── Theme — Modern Design System (Minimalism & Swiss, dark cinematic) ──
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -346,7 +350,7 @@ class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Elf-Ambilight")
+        self.title(f"{APP_NAME} v{APP_VERSION}")
         self.geometry("1020x700")
         self.minsize(800, 550)
         self.configure(fg_color=BG)
@@ -565,7 +569,7 @@ class App(ctk.CTk):
 
     def _unsaved_popup(self, msg: str, on_save, on_discard):
         top = ctk.CTkToplevel(self)
-        top.title("Unsaved changes")
+        top.title(f"Unsaved changes — {APP_NAME} v{APP_VERSION}")
         top.geometry("360x170")
         top.configure(fg_color=BG)
         top.transient(self)
@@ -953,7 +957,7 @@ class App(ctk.CTk):
                 pystray.MenuItem("Show", self._tray_show, default=True),
                 pystray.MenuItem("Quit", self._tray_quit),
             )
-            self._tray = pystray.Icon("Elf-Ambilight", img, "Elf-Ambilight", menu)
+            self._tray = pystray.Icon("Elf-Ambilight", img, f"{APP_NAME} v{APP_VERSION}", menu)
             threading.Thread(target=self._tray.run, daemon=True).start()
         except Exception as e:
             self._log(f"Tray unavailable: {e}")
@@ -1032,7 +1036,7 @@ class App(ctk.CTk):
 
     def _bt_prompt(self, auto=False):
         top = ctk.CTkToplevel(self)
-        top.title("Bluetooth is off")
+        top.title(f"Bluetooth is off — {APP_NAME} v{APP_VERSION}")
         top.geometry("380x200")
         top.configure(fg_color=BG)
         top.transient(self)
@@ -1522,7 +1526,7 @@ class App(ctk.CTk):
 
     def _new_group(self):
         top = ctk.CTkToplevel(self)
-        top.title("New Group")
+        top.title(f"New Group — {APP_NAME} v{APP_VERSION}")
         top.geometry("300x120")
         top.configure(fg_color=BG)
         top.grab_set()
@@ -1545,7 +1549,7 @@ class App(ctk.CTk):
     def _rename_group(self):
         old = self.cfg.selected_group
         top = ctk.CTkToplevel(self)
-        top.title("Rename Group")
+        top.title(f"Rename Group — {APP_NAME} v{APP_VERSION}")
         top.geometry("300x140")
         top.configure(fg_color=BG)
         top.grab_set()
@@ -2161,7 +2165,7 @@ class App(ctk.CTk):
         cur = list(getattr(self.cfg, attr, [255, 255, 255]))
         initial = rgb_hex(*cur)
         try:
-            picked = colorchooser.askcolor(color=initial, title=f"Calibrate {attr}")
+            picked = colorchooser.askcolor(color=initial, title=f"Calibrate {attr} — {APP_NAME} v{APP_VERSION}")
         except Exception as e:
             self._log(f"Picker: {e}")
             return
