@@ -5,5 +5,4 @@ customtkinter>=5.2
 pystray>=0.19
 pyinstaller>=6.0
 dxcam>=0.3.0  # high-FPS Desktop Duplication for Full-screen 60fps
-opencv-python>=4.5  # fast downscale for dxcam frames
 numpy>=1.20

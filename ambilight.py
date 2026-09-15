@@ -384,20 +384,11 @@ class Ambilight:
                         bw = max(1, int(box["width"]))
                         th = 50
                         tw = max(1, round(bw * th / max(1, bh)))
-                        try:
-                            import cv2  # type: ignore
-                            small_np = cv2.resize(frame, (tw, th), interpolation=cv2.INTER_AREA)
-                            # BGRA → RGB for _analyze_small
-                            # cv2 gives BGRA, need RGB
-                            small_np = cv2.cvtColor(small_np, cv2.COLOR_BGRA2RGB)
-                            img = Image.fromarray(small_np, "RGB")
-                        except Exception:
-                            # fallback via PIL from BGRA
-                            h, w = frame.shape[:2]
-                            # frame is BGRA, convert via PIL
-                            img_full = Image.frombytes("RGB", (w, h), frame.tobytes(), "raw", "BGRX")
-                            resample = getattr(Image, "Resampling", Image).BILINEAR
-                            img = img_full.resize((tw, th), resample)
+                        # BGRA numpy → RGB PIL then resize (PIL only, no cv2 needed)
+                        h, w = frame.shape[:2]
+                        img_full = Image.frombytes("RGB", (w, h), frame.tobytes(), "raw", "BGRX")
+                        resample = getattr(Image, "Resampling", Image).BILINEAR
+                        img = img_full.resize((tw, th), resample)
                         stats = self._analyze_small(img)
                         self.last_stats = stats
                         self.last_capture_ms = (time.perf_counter() - t0) * 1000.0
