@@ -63,7 +63,11 @@
   /* ── demo ── */
   .demo{background:var(--bg-deep);border:1px solid var(--border);border-radius:20px;
     padding:24px;margin:36px 0 8px}
-  #screen{width:100%;border-radius:12px;display:block;background:#000}
+  .monitor-wrap{position:relative;border-radius:16px;padding:14px}
+  #glow{position:absolute;inset:-26px;border-radius:28px;z-index:0;
+    background:radial-gradient(closest-side,rgba(99,102,241,.35),transparent 70%);
+    filter:blur(38px);pointer-events:none}
+  #screen{width:100%;border-radius:12px;display:block;background:#000;position:relative;z-index:1}
   #strip{display:flex;gap:6px;margin-top:14px}
   #strip i{flex:1;height:26px;border-radius:999px;background:#222;transition:none}
   .demo-bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:18px}
@@ -134,7 +138,10 @@
       the strip below mirrors it in real time. Drag the fade slider to feel the
       exact-duration crossfade from the app.</p>
     <div class="demo">
-      <canvas id="screen" width="640" height="300" aria-label="Simulated screen content"></canvas>
+      <div class="monitor-wrap">
+        <div id="glow" aria-hidden="true"></div>
+        <canvas id="screen" width="640" height="300" aria-label="Simulated screen content"></canvas>
+      </div>
       <div id="strip" aria-hidden="true"></div>
       <div class="demo-bar">
         <button class="icon-btn" id="playBtn" aria-label="Pause demo">⏸</button>
@@ -204,6 +211,7 @@
 
   /* ── interactive Ambilight demo ── */
   var cv = document.getElementById("screen"), ctx = cv.getContext("2d");
+  var glow = document.getElementById("glow"), glowTick = 0;
   var strip = document.getElementById("strip"), N = 24, leds = [];
   for(var i=0;i<N;i++){ var d=document.createElement("i"); strip.appendChild(d); leds.push(d); }
   var shown = []; for(var k=0;k<N;k++) shown.push([0,0,0]);
@@ -287,9 +295,24 @@
       leds[j].style.background=css([Math.round(shown[j][0]),Math.round(shown[j][1]),Math.round(shown[j][2])]);
       leds[j].style.boxShadow="0 0 14px 1px "+css([Math.round(shown[j][0]),Math.round(shown[j][1]),Math.round(shown[j][2])]);
     }
+    // backdrop bias-glow: average LED color, throttled to every 5th frame
+    if((glowTick=(glowTick+1)%5)===0){
+      var ar=0,ag=0,ab=0;
+      for(var m=0;m<N;m++){ ar+=shown[m][0]; ag+=shown[m][1]; ab+=shown[m][2]; }
+      var gc=css([Math.round(ar/N),Math.round(ag/N),Math.round(ab/N)]);
+      glow.style.background="radial-gradient(closest-side,"+gc+",transparent 72%)";
+      glow.style.opacity=".5";
+    }
   }
   // static final state when reduced motion: render one frame, no loop motion
   scenes[scene](1000,cv.width,cv.height);
+  (function(){
+    var img=ctx.getImageData(0,0,cv.width,cv.height).data, r=0,g=0,b=0,n=0;
+    for(var o=0;o<img.length;o+=400){ r+=img[o]; g+=img[o+1]; b+=img[o+2]; n++; }
+    var gc=css([Math.round(r/n),Math.round(g/n),Math.round(b/n)]);
+    glow.style.background="radial-gradient(closest-side,"+gc+",transparent 72%)";
+    glow.style.opacity=".5";
+  })();
   requestAnimationFrame(frame);
 })();
 </script>
