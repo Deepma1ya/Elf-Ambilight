@@ -28,6 +28,38 @@ from bt_helper import (
 )
 from startup_helper import startup_enabled, set_startup
 
+
+def _find_icon_path() -> Optional[str]:
+    """Locate icon.ico in dev (app folder) or frozen (exe dir / _MEIPASS)."""
+    cands: list[Path] = []
+    try:
+        cands.append(Path(__file__).with_name("icon.ico"))
+    except Exception:
+        pass
+    try:
+        cands.append(Path(sys.executable).with_name("icon.ico"))
+        cands.append(Path(sys.executable).parent / "icon.ico")
+    except Exception:
+        pass
+    try:
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            cands.append(Path(sys._MEIPASS) / "icon.ico")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        cands.append(Path.cwd() / "icon.ico")
+        cands.append(Path.cwd() / "Elf-Ambilight" / "icon.ico")
+    except Exception:
+        pass
+    for p in cands:
+        try:
+            if p.is_file():
+                return str(p)
+        except Exception:
+            continue
+    return None
+
+
 # ── Theme ──────────────────────────────────────────────────────────────
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -79,12 +111,41 @@ def rgb_to_hsl(r, g, b):
 
 # ── App ────────────────────────────────────────────────────────────────
 class App(ctk.CTk):
+    def _apply_window_icon(self):
+        """Use the same icon.ico for the window / taskbar (Win32)."""
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ElfAmbilight.App")
+        except Exception:
+            pass
+        p = _find_icon_path()
+        if not p:
+            return
+        try:
+            self.iconbitmap(p)
+        except Exception:
+            pass
+        try:
+            from PIL import Image, ImageTk  # type: ignore
+            im = Image.open(p)
+            resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1)
+            im2 = im.resize((32, 32), resample) if im.size != (32, 32) else im  # type: ignore
+            if im2.mode != "RGBA":
+                im2 = im2.convert("RGBA")
+            self._icon_photo = ImageTk.PhotoImage(im2)  # keep ref
+            try:
+                self.iconphoto(True, self._icon_photo)  # type: ignore
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def __init__(self):
         super().__init__()
         self.title("Elf-Ambilight")
         self.geometry("1020x700")
         self.minsize(800, 550)
         self.configure(fg_color=BG)
+        self._apply_window_icon()
 
         self.runner = AsyncRunner()
         self.ble = ElfBLE()
@@ -473,6 +534,15 @@ class App(ctk.CTk):
 
     def _really_quit(self):
         try:
+            self.ambilight._running = False
+            if self.ambilight._task is not None:
+                try:
+                    self.ambilight._task.cancel()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
             if self._tray is not None:
                 self._tray.stop()
         except Exception:
@@ -483,6 +553,11 @@ class App(ctk.CTk):
             pass
         try:
             self.destroy()
+        except Exception:
+            pass
+        try:
+            import os
+            os._exit(0)
         except Exception:
             pass
 
@@ -502,6 +577,21 @@ class App(ctk.CTk):
 
     # ── Tray ─────────────────────────────────────────────────────
     def _tray_icon_image(self):
+        """Same icon as title bar / taskbar (icon.ico). Fallback to colored
+        square for dev without icon.ico."""
+        p = _find_icon_path()
+        if p:
+            try:
+                from PIL import Image  # type: ignore
+                img = Image.open(p)
+                rs = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1)
+                if img.size != (64, 64):
+                    img = img.resize((64, 64), rs)  # type: ignore
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                return img
+            except Exception:
+                pass
         try:
             from PIL import Image, ImageDraw
             img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
@@ -541,11 +631,26 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+    def _force_quit(self):
+        """Quit unconditionally (tray -> Quit). Respects unsaved popup."""
+        if self._dirty:
+            names = ", ".join(self.PAGE_TITLES.get(k, k) for k in sorted(self._dirty))
+            self._unsaved_popup(
+                f"Unsaved changes on: {names}",
+                on_save=lambda: (self._save_all(), self._really_quit()),
+                on_discard=lambda: self._really_quit(),
+            )
+            return
+        self._really_quit()
+
     def _tray_quit(self, *a):
         try:
-            self.after(0, self._on_close)
+            self.after(0, self._force_quit)
         except Exception:
-            pass
+            try:
+                self._really_quit()
+            except Exception:
+                pass
 
     # ── BT status / prompt ───────────────────────────────────────
     def _bt_refresh_threaded(self):
@@ -1170,11 +1275,6 @@ class App(ctk.CTk):
     def _send_color(self):
         self._stage_color(add_recent=True)
         r, g, b = self._color
-        try:  # refresh tray icon on explicit sends only, not every slider tick
-            if self._tray is not None:
-                self._tray.icon = self._tray_icon_image()
-        except Exception:
-            pass
         self._send_pkt(pkt_color_static(r, g, b), f"static RGB({r},{g},{b})")
 
     def _live_toggled(self):
