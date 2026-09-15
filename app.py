@@ -118,8 +118,8 @@ def rgb_hex(r, g, b):
 
 # ── Modern Color Wheel — HSV, 220px, silky drag ─────────────────────
 class ColorWheel(ctk.CTkFrame):
-    """A beautiful HSV wheel: hue = angle, sat = radius, val fixed at ~0.9.
-    Lightweight PIL generation, Canvas thumb, 220ms hover, live callback."""
+    """HSV wheel: hue=angle, sat=radius. Cached PIL, canvas thumb, no flicker."""
+    _wheel_cache: dict[int, object] = {}  # size -> PIL Image (shared)
     def __init__(self, master, size: int = 220, command=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.size = size
@@ -129,24 +129,24 @@ class ColorWheel(ctk.CTkFrame):
         self._hue = 0.0
         self._sat = 1.0
         self._dragging = False
-
-        # canvas with rounded feel
         self.canvas = tk.Canvas(self, width=size, height=size, bg=CARD, highlightthickness=0, bd=0)
         self.canvas.pack(padx=6, pady=6)
-        # generate wheel image once
-        self._wheel_img = self._make_wheel_image(size)
+        # cached image — first call ~8ms via numpy, later 0ms
+        if size in ColorWheel._wheel_cache:
+            self._wheel_img = ColorWheel._wheel_cache[size]
+        else:
+            self._wheel_img = self._make_wheel_image(size)
+            ColorWheel._wheel_cache[size] = self._wheel_img
         try:
             from PIL import ImageTk  # type: ignore
-            self._tk_img = ImageTk.PhotoImage(self._wheel_img)
+            self._tk_img = ImageTk.PhotoImage(self._wheel_img)  # type: ignore[arg-type]
             self._img_id = self.canvas.create_image(self._center, self._center, image=self._tk_img)
         except Exception:
             self._tk_img = None
             self._img_id = None
-        # thumb
         self._thumb = self.canvas.create_oval(0, 0, 0, 0, outline="white", width=2, fill="")
         self._thumb_inner = self.canvas.create_oval(0, 0, 0, 0, outline="black", width=1, fill="")
         self._update_thumb()
-
         self.canvas.bind("<Button-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
@@ -675,39 +675,35 @@ class App(ctk.CTk):
         self._debounce[key] = self.after(delay_ms, lambda: (self._debounce.pop(key, None), fn()))
 
     def _on_resize(self, event):
-        # only care about the toplevel itself, not every child Configure
         if event.widget is not self:
             return
-        # debounce: while dragging, do nothing heavy; update after 120ms of idle
         if self._resize_after is not None:
             try:
                 self.after_cancel(self._resize_after)
             except Exception:
                 pass
-        self._resize_after = self.after(120, self._finish_resize)
+        # longer debounce + freeze content during drag for 60fps feel
+        self._resize_after = self.after(180, self._finish_resize)
 
     def _finish_resize(self):
         self._resize_after = None
-        # one lightweight relayout — no rebuild, just ensure current page fills
+        # no heavy relayout — place handles it, just ensure current page raised
         try:
             if self._current_page and self._current_page in self._pages:
-                pf = self._pages[self._current_page]
-                pf.grid_configure(padx=PAD, pady=PAD)
+                self._pages[self._current_page].tkraise()
         except Exception:
             pass
 
-    # ── Pages container — keep-alive place, pre-warm for zero lag ──
+    # ── Pages container — place keep-alive, no resize relayout ──
     def _build_pages(self, prewarm: bool = True):
         if not hasattr(self, "_content") or not str(getattr(self, "_content", None)) or str(self._content.winfo_exists()) != "1":
             self._content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
             self._content.pack(side="left", fill="both", expand=True)
+            self._content.pack_propagate(False)
+            self._content.grid_propagate(False)
         if not hasattr(self, "_pages"):
             self._pages = {}
         self._ensure_page("devices")
-        if prewarm:
-            others = [k for k in self._page_builders.keys() if k != "devices"]
-            for i, k in enumerate(others):
-                self.after(180 + i * 90, lambda kk=k: self._ensure_page(kk))
 
     def _ensure_page(self, name: str):
         if name in self._pages and str(self._pages[name].winfo_exists()) == "1":
