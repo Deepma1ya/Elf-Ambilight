@@ -6,6 +6,7 @@ import ctypes
 import json
 import sys
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,8 @@ from bt_helper import (
     looks_like_bt_off,
 )
 from startup_helper import (startup_enabled, set_startup, task_enabled,
-                              set_task, is_elevated, relaunch_elevated_task)
+                              set_task, is_elevated, relaunch_elevated_task,
+                              enable_high_priority)
 
 
 def _find_icon_path() -> Optional[str]:
@@ -383,6 +385,15 @@ class App(ctk.CTk):
         self._dirty: set[str] = set()
         self._current_page = ""
         self._debounce: dict[str, str] = {}
+        # smooth-brightness glide: retargetable 0.35 s fade emitting
+        # intermediate pkt_brightness steps (~30 Hz), same restart-from-shown
+        # idea as the color crossfade. _bri_shown tracks last emitted value.
+        self._bri_fade_after = None
+        self._bri_fade_from = float(self.cfg.last_brightness)
+        self._bri_fade_to = float(self.cfg.last_brightness)
+        self._bri_fade_t0 = 0.0
+        self._bri_shown = float(self.cfg.last_brightness)
+        self._bri_fade_ch = 0
         self._sched_fired: dict[int, str] = {}
         self._bt_prompted = False
         self._bt_state: str = "unknown"
@@ -661,6 +672,8 @@ class App(ctk.CTk):
             if not (do_color or do_modes):
                 return
             saved = self.cfg
+            self._cancel_bri_fade()
+            self._bri_shown = float(saved.last_brightness)
             self._send_pkt(pkt_brightness(saved.last_brightness),
                             f"revert brightness {saved.last_brightness}")
             if saved.last_sent == "mode" or (do_modes and not do_color):
@@ -1826,15 +1839,55 @@ class App(ctk.CTk):
         self._mark_dirty("color")
         self.bri_lbl.configure(text=str(v))
         if self.cfg.live_send:
-            self._debounced("bri", 150, lambda: self._send_bri(send_only=True))
+            ch = {"ALL": 0, "RGB": 1, "W": 2, "CT": 3}[self.chan_var.get()]
+            self._fade_bri_to(v, ch)
+
+    def _fade_bri_to(self, v, ch: int = 0):
+        """Glide the strip brightness to v (~0.35 s, ~30 Hz steps). New calls
+        retarget mid-flight from the last emitted value — no jumps, no lag."""
+        v = max(0, min(100, int(v)))
+        self._bri_fade_to = float(v)
+        self._bri_fade_ch = ch
+        if self._bri_fade_after is None:
+            self._bri_fade_from = float(self._bri_shown)
+            self._bri_fade_t0 = time.monotonic()
+            self._bri_fade_tick()
+
+    def _cancel_bri_fade(self):
+        if self._bri_fade_after is not None:
+            try:
+                self.after_cancel(self._bri_fade_after)
+            except Exception:
+                pass
+            self._bri_fade_after = None
+
+    def _bri_fade_tick(self):
+        self._bri_fade_after = None
+        try:
+            p = (time.monotonic() - self._bri_fade_t0) / 0.35
+            if p >= 1.0:
+                cur = int(round(self._bri_fade_to))
+            else:
+                cur = int(round(self._bri_fade_from
+                                + (self._bri_fade_to - self._bri_fade_from) * p))
+            if cur != int(round(self._bri_shown)):
+                self._bri_shown = float(cur)
+                self._send_pkt(pkt_brightness(cur, self._bri_fade_ch),
+                               f"brightness {cur}")
+            if p < 1.0:
+                self._bri_fade_after = self.after(33, self._bri_fade_tick)
+        except Exception:
+            self._bri_fade_after = None
 
     def _send_bri(self, send_only=False):
+        self._cancel_bri_fade()  # explicit Set = instant, no glide
         ch = {"ALL": 0, "RGB": 1, "W": 2, "CT": 3}[self.chan_var.get()]
         v = self.bri_var.get()
         if not send_only:
             self.cfg.last_brightness = v
             self._mark_dirty("color")
         self.bri_lbl.configure(text=str(v))
+        self._bri_shown = float(v)
         self._send_pkt(pkt_brightness(v, ch), f"brightness {v}")
 
     def _send_rgbw(self):
@@ -2269,7 +2322,7 @@ class App(ctk.CTk):
                        command=lambda _: self._mbri_changed()).pack()
         self.mbri_lbl.pack()
         ctk.CTkButton(right, text="Send Brightness", corner_radius=8,
-                       command=lambda: self._send_pkt(pkt_brightness(self.mbri_var.get()), "mode-bri")).pack(fill="x", pady=4)
+                        command=self._send_mbri_now).pack(fill="x", pady=4)
 
         return f
 
@@ -2293,8 +2346,12 @@ class App(ctk.CTk):
         self._mark_dirty("modes")
         self.mbri_lbl.configure(text=str(v))
         if self.cfg.live_send:
-            self._debounced("mbri", 200, lambda:
-                self._send_pkt(pkt_brightness(self.mbri_var.get()), "mode-bri live"))
+            self._fade_bri_to(v, ch=0xFF)
+
+    def _send_mbri_now(self):
+        self._cancel_bri_fade()
+        self._bri_shown = float(self.mbri_var.get())
+        self._send_pkt(pkt_brightness(self.mbri_var.get()), "mode-bri")
 
     def _send_speed(self, send_only=False):
         v = self.speed_var.get()
@@ -2949,15 +3006,15 @@ class App(ctk.CTk):
 
         # ── Startup ──
         sc = _card("Windows startup")
-        self._startup_var = ctk.BooleanVar(value=startup_enabled())
+        self._startup_var = ctk.BooleanVar(value=(startup_enabled() or task_enabled()))
         ctk.CTkCheckBox(sc, text="Start app with Windows", variable=self._startup_var,
                          corner_radius=R_SMALL,
                          command=self._startup_toggled).pack(anchor="w", pady=2)
         self._task_var = ctk.BooleanVar(value=task_enabled())
-        self._task_chk = ctk.CTkCheckBox(sc, text="High priority startup (elevated, before other startup apps)",
+        self._task_chk = ctk.CTkCheckBox(sc, text="High priority startup (task only — replaces normal startup)",
                                         variable=self._task_var, corner_radius=R_SMALL,
                                         command=self._task_toggled,
-                                        state="normal" if startup_enabled() else "disabled")
+                                        state="normal" if (startup_enabled() or task_enabled()) else "disabled")
         self._task_chk.pack(anchor="w", pady=2)
         _toggle(sc, "Start minimized to tray", self.cfg.start_minimized,
                 lambda on: (setattr(self.cfg, "start_minimized", on),
@@ -3104,34 +3161,33 @@ class App(ctk.CTk):
             pass
 
     def _refresh_startup_cmd(self):
-        try:
-            if startup_enabled():
-                set_startup(True, minimized=self.cfg.start_minimized)
-        except Exception as e:
-            self._log(f"Startup update: {e}")
+        # single launcher: task wins, registry is the fallback — never both
         try:
             if task_enabled():
                 set_task(True, minimized=self.cfg.start_minimized)
+            elif startup_enabled():
+                set_startup(True, minimized=self.cfg.start_minimized)
         except Exception as e:
-            self._log(f"Startup task update: {e}")
+            self._log(f"Startup update: {e}")
 
     def _sync_task_chk(self):
-        """High priority needs Start-with-Windows on — grey it out otherwise."""
+        """High priority needs Start-with-Windows intent on — grey it out otherwise."""
         try:
-            on = startup_enabled()
-            self._task_chk.configure(state="normal" if on else "disabled")
-            if not on and bool(self._task_var.get()):
+            intent = bool(self._startup_var.get())
+            self._task_chk.configure(state="normal" if intent else "disabled")
+            if not intent and task_enabled():
                 try:
                     set_task(False)
+                    self._task_var.set(False)
+                    self._log("High priority startup OFF (needs Start with Windows).")
                 except Exception as e:
                     self._log(f"High priority startup: {e}")
-                self._task_var.set(False)
-                self._log("High priority startup OFF (needs Start with Windows).")
+                    self._task_var.set(True)  # still active — show the truth
         except Exception:
             pass
 
     def _task_toggled(self):
-        if not startup_enabled():
+        if not bool(self._startup_var.get()) and not task_enabled():
             try:
                 self._task_var.set(False)
             except Exception:
@@ -3142,8 +3198,8 @@ class App(ctk.CTk):
         want = bool(self._task_var.get())
         try:
             if is_elevated():
-                set_task(want, minimized=self.cfg.start_minimized)
-                self._log("High priority startup " + ("ON (elevated logon task)." if want else "OFF."))
+                enable_high_priority(want, minimized=self.cfg.start_minimized)
+                self._log("High priority startup " + ("ON (task only — normal entry removed)." if want else "OFF (normal startup restored)."))
                 return
             # not elevated: revert display, ask Windows for admin, poll result
             self._task_var.set(task_enabled())
@@ -3173,13 +3229,30 @@ class App(ctk.CTk):
         self.after(5000, lambda: self._task_poll(want, tries - 1))
 
     def _startup_toggled(self):
+        on = bool(self._startup_var.get())
         try:
-            set_startup(bool(self._startup_var.get()), minimized=self.cfg.start_minimized)
-            self._log("Start with Windows " + ("ON." if self._startup_var.get() else "OFF."))
+            if on:
+                if task_enabled():
+                    set_startup(False)  # task stays the ONLY launcher
+                    self._log("Start with Windows ON (high priority task).")
+                else:
+                    set_startup(True, minimized=self.cfg.start_minimized)
+                    self._log("Start with Windows ON (normal).")
+            else:
+                set_startup(False)
+                if task_enabled():
+                    # task removal needs admin — route via UAC like the toggle
+                    if is_elevated():
+                        set_task(False)
+                    else:
+                        relaunch_elevated_task(False)
+                        self._log("Waiting for admin approval ...")
+                        self.after(4000, lambda: self._task_poll(False, 4))
+                self._log("Start with Windows OFF (all auto-start removed).")
         except Exception as e:
             self._log(f"Startup: {e}")
             try:
-                self._startup_var.set(startup_enabled())
+                self._startup_var.set(startup_enabled() or task_enabled())
             except Exception:
                 pass
         self._sync_task_chk()
@@ -3218,8 +3291,8 @@ def main():
             print("usage: --task on|off")
             return
         try:
-            set_task(on, minimized=bool(Config.load().start_minimized))
-            print(f"startup task {'ON' if on else 'OFF'}")
+            enable_high_priority(on, minimized=bool(Config.load().start_minimized))
+            print(f"high priority {'ON' if on else 'OFF'}")
         except Exception as e:
             print(f"task setup failed: {e}")
         return

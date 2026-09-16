@@ -89,6 +89,9 @@ class Ambilight:
         self._fade_target: tuple[int, int, int] = (0, 0, 0)
         self._fade_start: tuple[int, int, int] = (0, 0, 0)
         self._fade_t0: float = 0.0
+        # brightness-setting tracker: slider moves restart the fade at once
+        # instead of waiting for the >=2 restart gate on truncated values
+        self._last_bri = self.brightness
 
     def start(self):
         """Must be called from inside the asyncio loop thread (create_task
@@ -105,6 +108,7 @@ class Ambilight:
         self._running = True
         # fresh sampler state so the first fade converges immediately
         self._dom_ema_init = False
+        self._last_bri = self.brightness
         self._sampled_target = tuple(self.last_color)  # type: ignore
         self._still = 0
         self._prev_thumb = None
@@ -206,6 +210,13 @@ class Ambilight:
             self._dom_ema = raw
             self._dom_target = raw
             self._dom_ema_init = True
+        elif abs((raw[0] + raw[1] + raw[2])
+                 - (self._dom_target[0] + self._dom_target[1] + self._dom_target[2])) > 60.0:
+            # brightness fast-path: hard luminance shifts (scene cuts, fades,
+            # flashes) bypass the EMA ooze so brightness follows as fast as
+            # hue does; small wiggles still use the lock below.
+            self._dom_ema = raw
+            self._dom_target = raw
         else:
             self._dom_ema = (
                 self._dom_ema[0] + (raw[0] - self._dom_ema[0]) * ts,
@@ -487,7 +498,7 @@ class Ambilight:
 
     def _apply_brightness(self, r: int, g: int, b: int) -> tuple[int, int, int]:
         k = self.brightness / 100.0
-        return (int(r * k), int(g * k), int(b * k))
+        return (int(round(r * k)), int(round(g * k)), int(round(b * k)))
 
     async def _loop(self):
         """Capture-free fade loop. Reads the sampler's latest colour, walks
@@ -516,6 +527,17 @@ class Ambilight:
                         pass
 
                 now = time.monotonic()
+
+                # brightness-setting move (Ambi slider): restart the fade
+                # from the shown colour at once — glides instead of lagging
+                # behind the >= 2 restart gate below.
+                if self.brightness != self._last_bri:
+                    self._last_bri = self.brightness
+                    self._fade_start = (int(round(self._shown[0])),
+                                        int(round(self._shown[1])),
+                                        int(round(self._shown[2])))
+                    self._fade_target = (sr, sg, sb)
+                    self._fade_t0 = now
 
                 if self.crossfade:
                     # ── time-based linear fade: sampled screen colour is the
