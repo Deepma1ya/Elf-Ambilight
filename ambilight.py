@@ -367,7 +367,13 @@ class Ambilight:
         n = max(1, len(px))
         sr = sg = sb = 0
         hist: dict[int, list] = {}  # key -> [count, sum_r, sum_g, sum_b]
-        vib_s = -1
+        # vibrant = mean of the SATURATED population, gated on coverage.
+        # Single-max-pixel vibrant let one tiny accent (a pink link, a red
+        # close button) hijack the whole strip on an otherwise white screen.
+        # Mean-of-saturated is stable; below 5% coverage we fall back to the
+        # average so documents/desktops stay white.
+        sat_n = 0
+        sat_r = sat_g = sat_b = 0
         vib = (0, 0, 0)
         bri_v = -1
         bri = (0, 0, 0)
@@ -394,10 +400,11 @@ class Ambilight:
             if need_vibrant:
                 mx = r if r >= g and r >= b else (g if g >= b else b)
                 mn = r if r <= g and r <= b else (g if g <= b else b)
-                vs = (mx - mn) * mx
-                if vs > vib_s:
-                    vib_s = vs
-                    vib = (r, g, b)
+                if mx > 40 and (mx - mn) / mx > 0.30:
+                    sat_n += 1
+                    sat_r += r
+                    sat_g += g
+                    sat_b += b
             if need_brightest:
                 br = r + g + b
                 if br > bri_v:
@@ -443,9 +450,16 @@ class Ambilight:
         else:
             dom = avg
 
-        # fallback vibrants/brightest to avg if not computed
-        if not need_vibrant:
+        # vibrant: saturated-population mean when colour truly covers the
+        # screen, else the average (white documents stay white)
+        if need_vibrant:
+            if sat_n > 0 and sat_n / n >= 0.05:
+                vib = (sat_r // sat_n, sat_g // sat_n, sat_b // sat_n)
+            else:
+                vib = avg
+        else:
             vib = avg
+        # fallback brightest to avg if not computed
         if not need_brightest:
             bri = avg
 
