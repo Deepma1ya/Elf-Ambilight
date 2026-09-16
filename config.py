@@ -63,6 +63,10 @@ class Config:
     cal_gamma: float = 1.0
     cal_temp: int = 0
     cal_order: str = "RGB"
+    cal_sat: float = 1.0  # 0..2 saturation boost (1 = neutral)
+    cal_limit: float = 1.0  # 0.1..1 master output ceiling (1 = full)
+    # user-saved tune profiles: {name: {gain_r/g/b, gamma, temp, order, sat, limit, prim_r/g/b, white_pt}}
+    cal_tune_presets: dict[str, dict] = field(default_factory=dict)
     # per-color primaries: RGB triples the strip must receive for pure
     # red / green / blue requests (pick until the strip looks right).
     prim_r: list[int] = field(default_factory=lambda: [255, 0, 0])
@@ -189,6 +193,17 @@ class Config:
             r1 = 255.0 * ((max(0, r1) / 255.0) ** gm)
             g1 = 255.0 * ((max(0, g1) / 255.0) ** gm)
             b1 = 255.0 * ((max(0, b1) / 255.0) ** gm)
+        st = max(0.0, min(2.0, self.cal_sat))
+        if abs(st - 1.0) > 1e-6:
+            lum = (r1 + g1 + b1) / 3.0
+            r1 = lum + (r1 - lum) * st
+            g1 = lum + (g1 - lum) * st
+            b1 = lum + (b1 - lum) * st
+        lim = max(0.1, min(1.0, self.cal_limit))
+        if abs(lim - 1.0) > 1e-6:
+            r1 *= lim
+            g1 *= lim
+            b1 *= lim
         if not apply_order:
             def cl(v):
                 return max(0, min(255, int(round(v))))
@@ -229,6 +244,41 @@ class Config:
     @staticmethod
     def blank_schedule(n: int) -> dict:
         return Config._clean_schedule({"name": f"Schedule {n}"})
+
+    @staticmethod
+    def _clean_tune_profile(p: dict) -> dict:
+        """Clamp a user tune profile to valid ranges."""
+        if not isinstance(p, dict):
+            p = {}
+        def _rgb(key, default):
+            try:
+                v = [max(0, min(255, int(x))) for x in list(p.get(key, default))[:3]]
+                return v if len(v) == 3 else list(default)
+            except Exception:
+                return list(default)
+        def _f(key, lo, hi, default):
+            try:
+                return max(lo, min(hi, float(p.get(key, default))))
+            except Exception:
+                return default
+        order = str(p.get("order", "RGB")).upper()
+        if order not in ORDERS:
+            order = "RGB"
+        return {
+            "gain_r": _f("gain_r", 0.2, 2.0, 1.0),
+            "gain_g": _f("gain_g", 0.2, 2.0, 1.0),
+            "gain_b": _f("gain_b", 0.2, 2.0, 1.0),
+            "gamma": _f("gamma", 0.3, 3.0, 1.0),
+            "temp": max(-100, min(100, int(_f("temp", -100, 100, 0)))),
+            "order": order,
+            "sat": _f("sat", 0.0, 2.0, 1.0),
+            "limit": _f("limit", 0.1, 1.0, 1.0),
+            "prim_r": _rgb("prim_r", (255, 0, 0)),
+            "prim_g": _rgb("prim_g", (0, 255, 0)),
+            "prim_b": _rgb("prim_b", (0, 0, 255)),
+            "white_pt": _rgb("white_pt", (255, 255, 255)),
+            "enabled": bool(p.get("enabled", True)),
+        }
 
     @staticmethod
     def _clean_ambi_preset(p: dict) -> dict:
@@ -337,6 +387,21 @@ class Config:
                         for k, v in raw.items() if isinstance(v, dict)}
                 except Exception:
                     c.ambi_custom_presets = {}
+                try:
+                    c.cal_sat = max(0.0, min(2.0, float(c.cal_sat)))
+                except Exception:
+                    c.cal_sat = 1.0
+                try:
+                    c.cal_limit = max(0.1, min(1.0, float(c.cal_limit)))
+                except Exception:
+                    c.cal_limit = 1.0
+                try:
+                    raw = c.cal_tune_presets or {}
+                    c.cal_tune_presets = {
+                        str(k)[:24]: cls._clean_tune_profile(v)
+                        for k, v in raw.items() if isinstance(v, dict)}
+                except Exception:
+                    c.cal_tune_presets = {}
                 return c
         except Exception:
             pass

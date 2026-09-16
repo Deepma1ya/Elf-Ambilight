@@ -2028,9 +2028,28 @@ class App(ctk.CTk):
         body.pack(fill="both", expand=True)
         ctk.CTkLabel(body, text="Tune Colors", font=ctk.CTkFont(size=20, weight="bold"),
                       text_color=FG).pack(anchor="w", pady=(0, 4))
-        ctk.CTkLabel(body, text="White looks blue? Lower Blue gain (try 70-85%) or tune White "
-                                "below. Per-color sliders remap pure R/G/B/W. Edits stage until Save.",
-                      text_color=MUTED, wraplength=700).pack(anchor="w", pady=(0, 8))
+        ctk.CTkLabel(body, text="Start with the White balance helper below, or drag sliders "
+                                "directly. Per-color sliders remap pure R/G/B/W. Edits stage until Save.",
+                       text_color=MUTED, wraplength=700).pack(anchor="w", pady=(0, 8))
+
+        # White balance helper — guided: show white, tap the offending tint, repeat.
+        wb = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10)
+        wb.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(wb, text="White balance helper", text_color=MUTED,
+                      font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(wb, text="1 Show white · 2 tap the tint you see too much of · "
+                               "3 repeat until it looks white · 4 press Save.",
+                      text_color=MUTED, font=ctk.CTkFont(size=11)).pack(anchor="w", pady=(0, 6))
+        wrow = ctk.CTkFrame(wb, fg_color="transparent")
+        wrow.pack(fill="x")
+        ctk.CTkButton(wrow, text="Show white", corner_radius=8, width=90,
+                       fg_color=GREEN, hover_color="#2ea44f", text_color="#071018",
+                       command=self._wb_show).pack(side="left", padx=2)
+        for tname, kind in [("Too blue", "blue"), ("Too red", "red"),
+                            ("Too green", "green"), ("Too dim", "dim")]:
+            ctk.CTkButton(wrow, text=tname, corner_radius=8, width=80,
+                           fg_color=ACCENT_DIM,
+                           command=lambda k=kind: self._wb_nudge(k)).pack(side="left", padx=2)
 
         card = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10)
         card.pack(fill="x", pady=(0, 8))
@@ -2087,6 +2106,27 @@ class App(ctk.CTk):
         ctk.CTkOptionMenu(extra, variable=self._order_var, values=list(ORDERS),
                            width=70, corner_radius=8,
                            command=lambda _: self._cal_changed()).pack(side="left")
+
+        # saturation boost + output ceiling + live-white preview
+        extra2 = ctk.CTkFrame(card, fg_color="transparent")
+        extra2.pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(extra2, text="Saturation", width=60, text_color=MUTED).pack(side="left")
+        self._sat_var = ctk.DoubleVar(value=self.cfg.cal_sat * 100)
+        ctk.CTkSlider(extra2, from_=0, to=200, variable=self._sat_var, width=160,  # type: ignore[arg-type]
+                       command=lambda _: self._cal_changed()).pack(side="left", padx=4)
+        self._sat_lbl = ctk.CTkLabel(extra2, text=f"{self._sat_var.get():.0f}%", width=50,
+                                      font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
+        self._sat_lbl.pack(side="left")
+        ctk.CTkLabel(extra2, text="Ceiling", text_color=MUTED).pack(side="left", padx=(14, 4))
+        self._limit_var = ctk.DoubleVar(value=self.cfg.cal_limit * 100)
+        ctk.CTkSlider(extra2, from_=10, to=100, variable=self._limit_var, width=140,
+                       command=lambda _: self._cal_changed()).pack(side="left", padx=4)
+        self._limit_lbl = ctk.CTkLabel(extra2, text=f"{self._limit_var.get():.0f}%", width=50,
+                                        font=ctk.CTkFont(family="Consolas", size=11), text_color=MUTED)
+        self._limit_lbl.pack(side="left")
+        self._tune_live_white = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(extra2, text="Show white live", variable=self._tune_live_white,
+                         corner_radius=R_SMALL, font=ctk.CTkFont(size=11)).pack(side="left", padx=(14, 0))
 
         # per-color calibration: full R/G/B sliders per target color.
         # Each row tunes what the strip receives for pure R/G/B/W requests.
@@ -2173,6 +2213,27 @@ class App(ctk.CTk):
             b.pack(side="left", padx=2)
         self._cal_refresh_preview()
 
+        # named tune profiles (Day / Night / Movie ...) — full tune snapshot
+        prof = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10)
+        prof.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(prof, text="Tune profiles", text_color=MUTED,
+                      font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", pady=(0, 6))
+        prow = ctk.CTkFrame(prof, fg_color="transparent")
+        prow.pack(fill="x")
+        self._tune_prof_var = ctk.StringVar(value="(none yet)")
+        self._tune_prof_menu = ctk.CTkOptionMenu(prow, variable=self._tune_prof_var,
+                                                 values=["(none yet)"],
+                                                 width=150, corner_radius=8)
+        self._tune_prof_menu.pack(side="left")
+        for txt, fn in [("Apply", self._tune_prof_apply),
+                        ("Save", self._tune_prof_save),
+                        ("Rename", self._tune_prof_rename),
+                        ("Delete", self._tune_prof_delete)]:
+            ctk.CTkButton(prow, text=txt, corner_radius=8, width=64,
+                           fg_color=ACCENT_DIM,
+                           command=fn).pack(side="left", padx=2)
+        self._tune_refresh_prof_menu()
+
         return f
 
     def _cal_changed(self):
@@ -2183,13 +2244,30 @@ class App(ctk.CTk):
         self.cfg.cal_gamma = max(0.3, min(3.0, self._gamma_var.get()))
         self.cfg.cal_temp = max(-100, min(100, int(self._temp_var.get())))
         self.cfg.cal_order = self._order_var.get()
+        self.cfg.cal_sat = max(0.0, min(2.0, self._sat_var.get() / 100.0))
+        self.cfg.cal_limit = max(0.1, min(1.0, self._limit_var.get() / 100.0))
         self._gamma_lbl.configure(text=f"{self.cfg.cal_gamma:.2f}")
         self._temp_lbl.configure(text=str(self.cfg.cal_temp))
+        self._sat_lbl.configure(text=f"{self._sat_var.get():.0f}%")
+        self._limit_lbl.configure(text=f"{self._limit_var.get():.0f}%")
         self._mark_dirty("tune")
         self._cal_refresh_preview()
-        if self.cfg.live_send:
-            self._debounced("tune", 200,
-                             lambda: self._send_current_color(f"tune preview RGB{self._color}"))
+        self._tune_live_send()
+
+    def _tune_live_send(self):
+        """Tune-page live preview: white reference or current color."""
+        try:
+            if not self.cfg.live_send or not self._targets():
+                return
+            lw = getattr(self, "_tune_live_white", None)
+            if lw is not None and bool(lw.get()):
+                self._debounced("tune", 200, lambda: self._send_pkt(
+                    pkt_color_static(255, 255, 255), "tune live white"))
+            else:
+                self._debounced("tune", 200, lambda: self._send_current_color(
+                    f"tune preview RGB{self._color}"))
+        except Exception:
+            pass
 
     def _send_current_color(self, what: str):
         self.cfg.last_sent = "color"
@@ -2212,14 +2290,186 @@ class App(ctk.CTk):
         self.cfg.cal_gamma = 1.0
         self.cfg.cal_temp = 0
         self.cfg.cal_order = "RGB"
+        self.cfg.cal_sat = 1.0
+        self.cfg.cal_limit = 1.0
         self.cal_en.set(True)
         for k in ("R", "G", "B"):
             self._cal_vars[k].set(100)
         self._gamma_var.set(1.0)
         self._temp_var.set(0)
         self._order_var.set("RGB")
+        self._sat_var.set(100)
+        self._limit_var.set(100)
         self._cal_changed()
         self._log("Calibration reset (unsaved — press Save to keep).")
+
+    # ── white balance helper ──
+    def _wb_show(self):
+        self._send_pkt(pkt_color_static(255, 255, 255), "white balance ref")
+
+    def _wb_nudge(self, kind: str):
+        w = list(self.cfg.white_pt)
+        if kind == "dim":
+            w = [min(255, c + 12) for c in w]
+            msg = "brightened"
+        else:
+            idx = {"red": 0, "green": 1, "blue": 2}.get(kind, 2)
+            w[idx] = max(30, w[idx] - 15)
+            msg = f"less {kind}"
+        self.cfg.white_pt = w
+        self._mark_dirty("tune")
+        self._prim_refresh_row("white_pt")
+        self._cal_refresh_preview()
+        self._wb_show()
+        self._log(f"White balance {msg} -> {tuple(w)} (unsaved — press Save).")
+
+    # ── tune profiles (named, persisted, renameable) ──
+    def _tune_snapshot(self) -> dict:
+        return {
+            "gain_r": float(self.cfg.cal_gain_r),
+            "gain_g": float(self.cfg.cal_gain_g),
+            "gain_b": float(self.cfg.cal_gain_b),
+            "gamma": float(self.cfg.cal_gamma),
+            "temp": int(self.cfg.cal_temp),
+            "order": str(self.cfg.cal_order),
+            "sat": float(self.cfg.cal_sat),
+            "limit": float(self.cfg.cal_limit),
+            "prim_r": list(self.cfg.prim_r),
+            "prim_g": list(self.cfg.prim_g),
+            "prim_b": list(self.cfg.prim_b),
+            "white_pt": list(self.cfg.white_pt),
+            "enabled": bool(self.cfg.cal_enabled),
+        }
+
+    def _tune_sync_all(self):
+        """Push cfg tune state into every Tune widget (profile apply)."""
+        try:
+            self.cal_en.set(bool(self.cfg.cal_enabled))
+        except Exception:
+            pass
+        for k, attr in (("R", "cal_gain_r"), ("G", "cal_gain_g"), ("B", "cal_gain_b")):
+            try:
+                self._cal_vars[k].set(float(getattr(self.cfg, attr)) * 100)
+            except Exception:
+                pass
+        for var, attr, mul in ((getattr(self, "_gamma_var", None), "cal_gamma", 1.0),
+                               (getattr(self, "_temp_var", None), "cal_temp", 1.0),
+                               (getattr(self, "_sat_var", None), "cal_sat", 100.0),
+                               (getattr(self, "_limit_var", None), "cal_limit", 100.0)):
+            try:
+                if var is not None:
+                    var.set(float(getattr(self.cfg, attr)) * mul)
+            except Exception:
+                pass
+        try:
+            self._order_var.set(str(self.cfg.cal_order))
+        except Exception:
+            pass
+        for a in ("prim_r", "prim_g", "prim_b", "white_pt"):
+            try:
+                self._prim_refresh_row(a)
+            except Exception:
+                pass
+        self._cal_changed()
+
+    def _tune_prof_apply_dict(self, p: dict, label: str):
+        from config import Config as _Cfg
+        p = _Cfg._clean_tune_profile(dict(p))
+        try:
+            self.cfg.cal_enabled = p["enabled"]
+            self.cfg.cal_gain_r = p["gain_r"]
+            self.cfg.cal_gain_g = p["gain_g"]
+            self.cfg.cal_gain_b = p["gain_b"]
+            self.cfg.cal_gamma = p["gamma"]
+            self.cfg.cal_temp = p["temp"]
+            self.cfg.cal_order = p["order"]
+            self.cfg.cal_sat = p["sat"]
+            self.cfg.cal_limit = p["limit"]
+            self.cfg.prim_r = list(p["prim_r"])
+            self.cfg.prim_g = list(p["prim_g"])
+            self.cfg.prim_b = list(p["prim_b"])
+            self.cfg.white_pt = list(p["white_pt"])
+            self._tune_sync_all()
+            self._log(f"Tune profile '{label}' staged (unsaved).")
+        except Exception as e:
+            self._log(f"Tune profile '{label}' failed: {e}")
+
+    def _tune_prof_names(self) -> list[str]:
+        try:
+            return sorted(self.cfg.cal_tune_presets.keys())
+        except Exception:
+            return []
+
+    def _tune_prof_current(self):
+        try:
+            name = self._tune_prof_var.get()
+            if name in self.cfg.cal_tune_presets:
+                return name
+        except Exception:
+            pass
+        return None
+
+    def _tune_refresh_prof_menu(self, select=None):
+        try:
+            names = self._tune_prof_names()
+            if not names:
+                self._tune_prof_menu.configure(values=["(none yet)"])
+                self._tune_prof_var.set("(none yet)")
+                return
+            self._tune_prof_menu.configure(values=names)
+            self._tune_prof_var.set(select if select in names else names[0])
+        except Exception:
+            pass
+
+    def _tune_prof_apply(self):
+        name = self._tune_prof_current()
+        if name is None:
+            self._log("No tune profiles yet — Save one first.")
+            return
+        self._tune_prof_apply_dict(self.cfg.cal_tune_presets[name], name)
+
+    def _tune_prof_save(self):
+        snap = self._tune_snapshot()
+        cur = self._tune_prof_current()
+        initial = cur if cur else f"Profile {len(self._tune_prof_names()) + 1}"
+        name = self._ambi_name_dialog("Save tune profile as", initial)
+        if name is None:
+            return
+        if name in self.cfg.cal_tune_presets and not messagebox.askyesno(
+                "Overwrite profile", f"Replace '{name}' with current tuning?"):
+            return
+        self.cfg.cal_tune_presets[name] = snap
+        self._save_keys({"cal_tune_presets": self.cfg.cal_tune_presets})
+        self._tune_refresh_prof_menu(select=name)
+        self._log(f"Tune profile '{name}' saved.")
+
+    def _tune_prof_rename(self):
+        old = self._tune_prof_current()
+        if old is None:
+            self._log("No tune profiles yet — Save one first.")
+            return
+        name = self._ambi_name_dialog("Rename tune profile", old)
+        if name is None or name == old:
+            return
+        if name in self.cfg.cal_tune_presets:
+            messagebox.showinfo("Rename profile", f"'{name}' already exists.")
+            return
+        self.cfg.cal_tune_presets[name] = self.cfg.cal_tune_presets.pop(old)
+        self._save_keys({"cal_tune_presets": self.cfg.cal_tune_presets})
+        self._tune_refresh_prof_menu(select=name)
+        self._log(f"Tune profile '{old}' renamed to '{name}'.")
+
+    def _tune_prof_delete(self):
+        old = self._tune_prof_current()
+        if old is None:
+            self._log("No tune profiles yet — nothing to delete.")
+            return
+        if not messagebox.askyesno("Delete profile", f"Delete '{old}'?"):
+            return
+        self.cfg.cal_tune_presets.pop(old, None)
+        self._save_keys({"cal_tune_presets": self.cfg.cal_tune_presets})
+        self._tune_refresh_prof_menu()
+        self._log(f"Tune profile '{old}' deleted.")
 
     def _cal_test(self, r, g, b):
         self._set_color(r, g, b)
@@ -2248,9 +2498,7 @@ class App(ctk.CTk):
             self._mark_dirty("tune")
             self._prim_refresh_row(attr)
             self._cal_refresh_preview()
-            if self.cfg.live_send:
-                self._debounced("tune", 200,
-                                 lambda: self._send_current_color(f"tune live RGB{self._color}"))
+            self._tune_live_send()
         except Exception:
             pass
 
