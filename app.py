@@ -407,7 +407,8 @@ class App(ctk.CTk):
                                    capture_mode=self.cfg.ambi_mode,
                                    update_interval=self.cfg.ambi_interval,
                                    crossfade=self.cfg.ambi_crossfade,
-                                   use_dxcam=self.cfg.ambi_use_dxcam)
+                                   use_dxcam=self.cfg.ambi_use_dxcam,
+                                   white_floor=self.cfg.ambi_white_floor)
         self.ambilight.sample_mode = self.cfg.ambi_sample
         self.ambilight.calibrate = self.cfg.cal_apply
         try:
@@ -2707,6 +2708,7 @@ class App(ctk.CTk):
             ("Crossfade (s)", "smooth", 0.0, 10.0),
             ("Brightness", "brightness", 1, 100),
             ("Min Delta", "min_delta", 0, 30),
+            ("Dull→white", "white_floor", 0, 100),
             ("Update every (s)", "interval", 0.02, 2.0),
         ]):
             row = ctk.CTkFrame(grid, fg_color="transparent")
@@ -2827,6 +2829,7 @@ class App(ctk.CTk):
             "brightness": int(self._ambi_vars["brightness"].get()),
             "min_delta": int(self._ambi_vars["min_delta"].get()),
             "interval": round(float(self._ambi_vars["interval"].get()), 3),
+            "white_floor": max(0, min(100, int(self._ambi_vars["white_floor"].get()))),
             "mode": self._ambi_mode(),
             "sample": self._ambi_sample(),
             "crossfade": bool(self._ambi_crossfade_var.get()),
@@ -2838,12 +2841,14 @@ class App(ctk.CTk):
         from config import Config as _Cfg
         has_xf = "crossfade" in p  # legacy presets don't touch the switches
         has_dx = "dxcam" in p
+        has_wf = "white_floor" in p
         p = _Cfg._clean_ambi_preset(dict(p))
         try:
             self._ambi_vars["fps"].set(p["fps"])
             self._ambi_vars["smooth"].set(p["smooth"])
             self._ambi_vars["brightness"].set(p["brightness"])
             self._ambi_vars["min_delta"].set(p["min_delta"])
+            self._ambi_vars["white_floor"].set(p["white_floor"])
             self._ambi_vars["interval"].set(p["interval"])
             self._ambi_mode_var.set("Center 50% (fast)" if p["mode"] == "center"
                                     else "Full screen (slow)")
@@ -2851,6 +2856,11 @@ class App(ctk.CTk):
             if has_xf:
                 self._ambi_crossfade_var.set(bool(p["crossfade"]))
                 self._ambi_crossfade_toggled()
+            if has_wf:
+                try:
+                    self.ambilight.white_floor = float(p["white_floor"])
+                except Exception:
+                    pass
             if has_dx:
                 want = bool(p["dxcam"])
                 if want:
@@ -3008,6 +3018,8 @@ class App(ctk.CTk):
                 lbl.configure(text=f"{v:.1f}s")
             elif k == "interval":
                 lbl.configure(text=f"{v:.2f}s")
+            elif k == "white_floor":
+                lbl.configure(text=f"{v:.0f}%" + (" (off)" if v <= 0.5 else ""))
             else:
                 lbl.configure(text=f"{v:.0f}")
         if save:
@@ -3023,6 +3035,11 @@ class App(ctk.CTk):
             except Exception:
                 pass
             self.cfg.ambi_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
+            try:
+                self.cfg.ambi_white_floor = max(0, min(100, int(self._ambi_vars["white_floor"].get())))
+                self.ambilight.white_floor = float(self.cfg.ambi_white_floor)
+            except Exception:
+                pass
             try:
                 self.cfg.ambi_crossfade = bool(self._ambi_crossfade_var.get())
                 self.ambilight.crossfade = self.cfg.ambi_crossfade
@@ -3061,6 +3078,11 @@ class App(ctk.CTk):
         except Exception:
             pass
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
+        try:
+            self.ambilight.white_floor = max(0.0, min(100.0, float(self._ambi_vars["white_floor"].get())))
+            self.cfg.ambi_white_floor = int(self.ambilight.white_floor)
+        except Exception:
+            pass
         try:
             self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
         except Exception:
@@ -3139,6 +3161,10 @@ class App(ctk.CTk):
         except Exception:
             pass
         self.ambilight.update_interval = max(0.01, min(5.0, float(self._ambi_vars["interval"].get())))
+        try:
+            self.ambilight.white_floor = max(0.0, min(100.0, float(self._ambi_vars["white_floor"].get())))
+        except Exception:
+            pass
         try:
             self.ambilight.crossfade = bool(self._ambi_crossfade_var.get())
         except Exception:

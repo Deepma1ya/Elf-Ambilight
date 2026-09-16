@@ -24,8 +24,8 @@ class Ambilight:
     def __init__(self, ble, get_targets, fps: float = 30.0, smooth: float = 0.35,
                  min_delta: int = 6, brightness: int = 100,
                  capture_mode: str = "center", update_interval: float = 0.1,
-                 crossfade: bool = True, use_dxcam: bool = True,
-                 sample_hz: float = 5.0):
+                  crossfade: bool = True, use_dxcam: bool = True,
+                  sample_hz: float = 5.0, white_floor: float = 0.0):
         """
         ble: ElfBLE instance
         get_targets: callable() -> list[str] (connected MACs to drive)
@@ -41,6 +41,9 @@ class Ambilight:
         sample_hz: screen sampling rate for the background sampler thread
                    (default 5Hz, 2Hz eco when still). The expensive grab runs
                    here — never in the fade loop — so Windows stays silky.
+        white_floor: 0..100 — minimum saturation (%) required to show the
+                   sampled colour; duller scenes show white at the sampled
+                   luminance instead of dull grey. 0 = off.
         """
         self.ble = ble
         self.get_targets = get_targets
@@ -54,6 +57,8 @@ class Ambilight:
         self.update_interval = max(0.01, min(5.0, update_interval))
         self.crossfade = bool(crossfade)
         self.sample_hz = max(1.0, min(15.0, sample_hz))
+        self.white_floor = max(0.0, min(100.0, white_floor))
+        self._white_active = False  # dull-fallback latch (hysteresis)
         # optional Windows Dynamic Lighting mirror (DynLight, never blocks)
         self.dynlight = None
         # capture monitor: 1-based mss index (1 = primary), 0 = all monitors
@@ -500,6 +505,32 @@ class Ambilight:
         k = self.brightness / 100.0
         return (int(round(r * k)), int(round(g * k)), int(round(b * k)))
 
+    def _white_fallback(self, r: int, g: int, b: int) -> tuple[int, int, int]:
+        """Dull-scene fallback: below-threshold saturation shows white at the
+        sampled luminance instead of dull grey. Luminance-preserving (a dark
+        scene stays dark) — only the tint is replaced. Hysteresis latch stops
+        strobing when saturation hovers at the boundary; the fade loop glides
+        the swap so it never jumps."""
+        try:
+            thr = max(0.0, min(100.0, float(self.white_floor))) / 100.0
+        except Exception:
+            return (r, g, b)
+        if thr <= 0.0:
+            self._white_active = False
+            return (r, g, b)
+        mx = r if r >= g and r >= b else (g if g >= b else b)
+        mn = r if r <= g and r <= b else (g if g <= b else b)
+        sat = ((mx - mn) / mx) if mx > 0 else 0.0
+        if self._white_active:
+            if sat > thr + 0.03:
+                self._white_active = False
+        elif sat < thr - 0.03:
+            self._white_active = True
+        if not self._white_active:
+            return (r, g, b)
+        w = int(round((r + g + b) / 3.0))
+        return (w, w, w)
+
     async def _loop(self):
         """Capture-free fade loop. Reads the sampler's latest colour, walks
         the strip toward it, sends on change. No grabs, no resizes, no
@@ -520,6 +551,7 @@ class Ambilight:
                 self.frames += 1
                 st = self._sampled_target
                 sr, sg, sb = self._apply_brightness(st[0], st[1], st[2])
+                sr, sg, sb = self._white_fallback(sr, sg, sb)
                 if self.calibrate is not None:
                     try:
                         sr, sg, sb = self.calibrate(sr, sg, sb)
