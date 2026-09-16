@@ -367,13 +367,7 @@ class Ambilight:
         n = max(1, len(px))
         sr = sg = sb = 0
         hist: dict[int, list] = {}  # key -> [count, sum_r, sum_g, sum_b]
-        # vibrant = brightest pixel of the best-supported hue, gated on
-        # coverage. A lone max-pixel let one tiny accent (a pink link, a red
-        # close button) hijack the whole strip; a mean would merely muddy the
-        # brights. Hue buckets vote — the winning hue must cover >= 5% of the
-        # frame, and its brightest pixel goes to the strip at FULL brightness.
-        # Below 5% we fall back to the average: documents stay white.
-        sat_buckets: dict[int, list] = {}  # key -> [count, brightest pixel]
+        vib_s = -1
         vib = (0, 0, 0)
         bri_v = -1
         bri = (0, 0, 0)
@@ -400,20 +394,10 @@ class Ambilight:
             if need_vibrant:
                 mx = r if r >= g and r >= b else (g if g >= b else b)
                 mn = r if r <= g and r <= b else (g if g <= b else b)
-                if mx > 40 and (mx - mn) / mx > 0.30:
-                    hkey = 0 if r >= g and r >= b else (1 if g >= r and g >= b else 2)  # coarse hue
-                    # two lightness halves per hue keeps bright neons distinct from dark saturated noise
-                    lkey = 1 if mx > 150 else 0
-                    key = hkey * 2 + lkey  # 6 saturated buckets
-                    e = sat_buckets.get(key)
-                    if e is None:
-                        sat_buckets[key] = [1, (r, g, b), r + g + b]  # [count, brightest_pixel, brightest_sum]
-                    else:
-                        e[0] += 1
-                        s = r + g + b
-                        if s > e[2]:
-                            e[1] = (r, g, b)
-                            e[2] = s
+                vs = (mx - mn) * mx
+                if vs > vib_s:
+                    vib_s = vs
+                    vib = (r, g, b)
             if need_brightest:
                 br = r + g + b
                 if br > bri_v:
@@ -459,21 +443,9 @@ class Ambilight:
         else:
             dom = avg
 
-        # vibrant: the winning hue's brightest pixel (FULL pop) once that
-        # hue truly covers the screen; else the average (white stays white)
-        if need_vibrant:
-            win = avg
-            if sat_buckets:
-                bk = max(sat_buckets.keys(), key=lambda k: ((sat_buckets[k][0], sat_buckets[k][2])))
-                vcount, vpix = sat_buckets[bk][0], sat_buckets[bk][1]
-                if vcount / n >= 0.05:
-                    win = (int(vpix[0]), int(vpix[1]), int(vpix[2]))
-                else:
-                    win = avg
-            vib = win
-        else:
+        # fallback vibrants/brightest to avg if not computed
+        if not need_vibrant:
             vib = avg
-        # fallback brightest to avg if not computed
         if not need_brightest:
             bri = avg
 
