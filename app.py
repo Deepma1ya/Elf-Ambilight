@@ -2637,10 +2637,29 @@ class App(ctk.CTk):
         prow.pack(fill="x", pady=(0, 8))
         ctk.CTkLabel(prow, text="Presets", text_color=MUTED,
                       font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
-        for pname in ["Movie", "Game", "Chill", "Party"]:
+        for pname in ["Movie", "Game", "Balanced", "Chill", "Party"]:
             ctk.CTkButton(prow, text=pname, corner_radius=8, width=70,
                            fg_color=ACCENT_DIM,
                            command=lambda p=pname: self._ambi_preset(p)).pack(side="left", padx=2)
+
+        # user presets: snapshot current settings under a name, rename later
+        urow = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
+        urow.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(urow, text="My presets", text_color=MUTED,
+                      font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
+        self._ambi_custom_var = ctk.StringVar(value="(none yet)")
+        self._ambi_custom_menu = ctk.CTkOptionMenu(urow, variable=self._ambi_custom_var,
+                                                   values=["(none yet)"],
+                                                   width=150, corner_radius=8)
+        self._ambi_custom_menu.pack(side="left")
+        for txt, fn in [("Apply", self._ambi_custom_apply),
+                        ("Save", self._ambi_custom_save),
+                        ("Rename", self._ambi_custom_rename),
+                        ("Delete", self._ambi_custom_delete)]:
+            ctk.CTkButton(urow, text=txt, corner_radius=8, width=64,
+                           fg_color=ACCENT_DIM,
+                           command=fn).pack(side="left", padx=2)
+        self._ambi_refresh_custom_menu()
 
         cand = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         cand.pack(fill="x", pady=(0, 8))
@@ -2787,21 +2806,65 @@ class App(ctk.CTk):
                   "interval": 1.00, "mode": "center", "sample": "average"},
         "Party": {"fps": 30, "smooth": 1.0, "brightness": 100, "min_delta": 2,
                   "interval": 0.30, "mode": "center", "sample": "brightest"},
+        "Balanced": {"fps": 60, "smooth": 0.2, "brightness": 100, "min_delta": 9,
+                     "interval": 0.12, "mode": "full", "sample": "vibrant",
+                     "crossfade": True, "dxcam": True},
     }
 
     def _ambi_preset(self, name: str):
         p = self.AMBI_PRESETS.get(name)
+        if p is None:
+            p = self.cfg.ambi_custom_presets.get(name)
         if not p:
             return
-        self._ambi_vars["fps"].set(p["fps"])
-        self._ambi_vars["smooth"].set(p["smooth"])
-        self._ambi_vars["brightness"].set(p["brightness"])
-        self._ambi_vars["min_delta"].set(p["min_delta"])
-        self._ambi_vars["interval"].set(p["interval"])
-        self._ambi_mode_var.set("Center 50% (fast)" if p["mode"] == "center" else "Full screen (slow)")
-        self._ambi_sample_var.set(str(p["sample"]).capitalize())
-        self._ambi_refresh()
-        self._log(f"Ambilight preset '{name}' staged (unsaved).")
+        self._ambi_apply_dict(p, name)
+
+    def _ambi_snapshot(self) -> dict:
+        """Current Ambi tab state as a preset dict (for user presets)."""
+        return {
+            "fps": int(round(float(self._ambi_vars["fps"].get()))),
+            "smooth": round(float(self._ambi_vars["smooth"].get()), 2),
+            "brightness": int(self._ambi_vars["brightness"].get()),
+            "min_delta": int(self._ambi_vars["min_delta"].get()),
+            "interval": round(float(self._ambi_vars["interval"].get()), 3),
+            "mode": self._ambi_mode(),
+            "sample": self._ambi_sample(),
+            "crossfade": bool(self._ambi_crossfade_var.get()),
+            "dxcam": bool(self._ambi_dxcam_var.get()),
+        }
+
+    def _ambi_apply_dict(self, p: dict, label: str):
+        """Stage a preset dict (built-in or custom) onto the Ambi tab."""
+        from config import Config as _Cfg
+        has_xf = "crossfade" in p  # legacy presets don't touch the switches
+        has_dx = "dxcam" in p
+        p = _Cfg._clean_ambi_preset(dict(p))
+        try:
+            self._ambi_vars["fps"].set(p["fps"])
+            self._ambi_vars["smooth"].set(p["smooth"])
+            self._ambi_vars["brightness"].set(p["brightness"])
+            self._ambi_vars["min_delta"].set(p["min_delta"])
+            self._ambi_vars["interval"].set(p["interval"])
+            self._ambi_mode_var.set("Center 50% (fast)" if p["mode"] == "center"
+                                    else "Full screen (slow)")
+            self._ambi_sample_var.set(str(p["sample"]).capitalize())
+            if has_xf:
+                self._ambi_crossfade_var.set(bool(p["crossfade"]))
+                self._ambi_crossfade_toggled()
+            if has_dx:
+                want = bool(p["dxcam"])
+                if want:
+                    try:
+                        import dxcam  # noqa: F401 — only if present
+                    except Exception:
+                        want = False
+                        self._log("Preset: dxcam not installed — GPU capture stays OFF.")
+                self._ambi_dxcam_var.set(want)
+                self._ambi_dxcam_toggled()
+            self._ambi_refresh()
+            self._log(f"Ambilight preset '{label}' staged (unsaved).")
+        except Exception as e:
+            self._log(f"Preset '{label}' failed: {e}")
 
     def _ambi_sample(self) -> str:
         try:
@@ -2809,6 +2872,122 @@ class App(ctk.CTk):
             return s if s in ("average", "dominant", "vibrant", "brightest") else "average"
         except Exception:
             return "average"
+
+    # ── user ambilight presets (named, persisted, renameable) ──
+    def _ambi_custom_names(self) -> list[str]:
+        try:
+            return sorted(self.cfg.ambi_custom_presets.keys())
+        except Exception:
+            return []
+
+    def _ambi_custom_current(self):
+        """Selected custom name, or None if the dummy entry is showing."""
+        try:
+            name = self._ambi_custom_var.get()
+            if name in self.cfg.ambi_custom_presets:
+                return name
+        except Exception:
+            pass
+        return None
+
+    def _ambi_refresh_custom_menu(self, select=None):
+        try:
+            names = self._ambi_custom_names()
+            if not names:
+                self._ambi_custom_menu.configure(values=["(none yet)"])
+                self._ambi_custom_var.set("(none yet)")
+                return
+            self._ambi_custom_menu.configure(values=names)
+            self._ambi_custom_var.set(select if select in names else names[0])
+        except Exception:
+            pass
+
+    def _ambi_name_dialog(self, title: str, initial: str):
+        """Modal name prompt. Returns the name or None (cancelled/empty)."""
+        out: list = []
+        top = ctk.CTkToplevel(self)
+        top.title(f"{title} — {APP_NAME} v{APP_VERSION}")
+        top.geometry("320x140")
+        top.configure(fg_color=BG)
+        top.transient(self)
+        top.grab_set()
+        try:
+            top.after(50, top.focus_force)
+        except Exception:
+            pass
+        ctk.CTkLabel(top, text=title, text_color=FG,
+                      font=ctk.CTkFont(size=13, weight="bold")).pack(pady=(14, 6))
+        ent = ctk.CTkEntry(top, width=240)
+        ent.insert(0, initial[:24])
+        ent.pack()
+        ent.focus_set()
+        ent.select_range(0, "end")
+        row = ctk.CTkFrame(top, fg_color="transparent")
+        row.pack(pady=12)
+        ctk.CTkButton(row, text="OK", corner_radius=8, width=90,
+                       command=lambda: (out.append(ent.get().strip()[:24]),
+                                        top.destroy())).pack(side="left", padx=4)
+        ctk.CTkButton(row, text="Cancel", corner_radius=8, width=90,
+                       fg_color="transparent", border_width=1,
+                       command=top.destroy).pack(side="left", padx=4)
+        ent.bind("<Return>", lambda _e: (out.append(ent.get().strip()[:24]),
+                                         top.destroy()))
+        try:
+            self.wait_window(top)
+        except Exception:
+            pass
+        name = (out[0].strip() if out else "")
+        return name or None
+
+    def _ambi_custom_apply(self):
+        name = self._ambi_custom_current()
+        if name is None:
+            self._log("No custom presets yet — Save one first.")
+            return
+        self._ambi_apply_dict(self.cfg.ambi_custom_presets[name], name)
+
+    def _ambi_custom_save(self):
+        snap = self._ambi_snapshot()
+        cur = self._ambi_custom_current()
+        initial = cur if cur else f"Custom {len(self._ambi_custom_names()) + 1}"
+        name = self._ambi_name_dialog("Save preset as", initial)
+        if name is None:
+            return
+        if name in self.cfg.ambi_custom_presets and not messagebox.askyesno(
+                "Overwrite preset", f"Replace '{name}' with current settings?"):
+            return
+        self.cfg.ambi_custom_presets[name] = snap
+        self._save_keys({"ambi_custom_presets": self.cfg.ambi_custom_presets})
+        self._ambi_refresh_custom_menu(select=name)
+        self._log(f"Ambilight preset '{name}' saved.")
+
+    def _ambi_custom_rename(self):
+        old = self._ambi_custom_current()
+        if old is None:
+            self._log("No custom presets yet — Save one first.")
+            return
+        name = self._ambi_name_dialog("Rename preset", old)
+        if name is None or name == old:
+            return
+        if name in self.cfg.ambi_custom_presets:
+            messagebox.showinfo("Rename preset", f"'{name}' already exists.")
+            return
+        self.cfg.ambi_custom_presets[name] = self.cfg.ambi_custom_presets.pop(old)
+        self._save_keys({"ambi_custom_presets": self.cfg.ambi_custom_presets})
+        self._ambi_refresh_custom_menu(select=name)
+        self._log(f"Ambilight preset '{old}' renamed to '{name}'.")
+
+    def _ambi_custom_delete(self):
+        old = self._ambi_custom_current()
+        if old is None:
+            self._log("No custom presets yet — nothing to delete.")
+            return
+        if not messagebox.askyesno("Delete preset", f"Delete '{old}'?"):
+            return
+        self.cfg.ambi_custom_presets.pop(old, None)
+        self._save_keys({"ambi_custom_presets": self.cfg.ambi_custom_presets})
+        self._ambi_refresh_custom_menu()
+        self._log(f"Ambilight preset '{old}' deleted.")
 
     def _ambi_dxcam_toggled(self):
         try:

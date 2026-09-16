@@ -110,6 +110,9 @@ class Config:
     dynlight_enabled: bool = False
     # ambilight capture monitor: 1-based mss index (1 = primary), 0 = all
     ambi_monitor: int = 1
+    # user-saved ambilight presets: {name: {fps, smooth, brightness,
+    # min_delta, interval, mode, sample, crossfade, dxcam}}
+    ambi_custom_presets: dict[str, dict] = field(default_factory=dict)
 
     # timers
     t1_hour: int = 7
@@ -226,6 +229,38 @@ class Config:
     def blank_schedule(n: int) -> dict:
         return Config._clean_schedule({"name": f"Schedule {n}"})
 
+    @staticmethod
+    def _clean_ambi_preset(p: dict) -> dict:
+        """Clamp a user ambilight preset to valid ranges (same as built-ins)."""
+        if not isinstance(p, dict):
+            p = {}
+        def _f(key, lo, hi, default):
+            try:
+                return max(lo, min(hi, float(p.get(key, default))))
+            except Exception:
+                return default
+        def _i(key, lo, hi, default):
+            try:
+                return max(lo, min(hi, int(float(p.get(key, default)))))
+            except Exception:
+                return default
+        mode = str(p.get("mode", "center")).lower()
+        mode = "full" if mode == "full" else "center"
+        sample = str(p.get("sample", "average")).lower()
+        if sample not in ("average", "dominant", "vibrant", "brightest"):
+            sample = "average"
+        return {
+            "fps": _i("fps", 1, 60, 30),
+            "smooth": _f("smooth", 0.0, 10.0, 2.0),
+            "brightness": _i("brightness", 1, 100, 100),
+            "min_delta": _i("min_delta", 0, 30, 8),
+            "interval": _f("interval", 0.01, 5.0, 0.12),
+            "mode": mode,
+            "sample": sample,
+            "crossfade": bool(p.get("crossfade", True)),
+            "dxcam": bool(p.get("dxcam", True)),
+        }
+
     @classmethod
     def load(cls) -> "Config":
         migrate_legacy_config()
@@ -289,6 +324,13 @@ class Config:
                     c.ambi_monitor = max(0, int(c.ambi_monitor))
                 except Exception:
                     c.ambi_monitor = 1
+                try:
+                    raw = c.ambi_custom_presets or {}
+                    c.ambi_custom_presets = {
+                        str(k)[:24]: cls._clean_ambi_preset(v)
+                        for k, v in raw.items() if isinstance(v, dict)}
+                except Exception:
+                    c.ambi_custom_presets = {}
                 return c
         except Exception:
             pass
