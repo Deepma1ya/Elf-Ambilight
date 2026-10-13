@@ -184,6 +184,37 @@ def _card_hover(card, normal: str = CARD_BORDER, hover: str = CARD_BORDER_HOVER)
     except Exception:
         pass
 
+
+class _ShellSections:
+    """Shared section + hero builders: every page gets the same anatomy —
+    hero row (title + subtitle + optional action side) and bordered cards
+    with title + hint. Keeps 7 pages visually one product."""
+
+    @staticmethod
+    def hero(parent, title: str, sub: str):
+        wrap = ctk.CTkFrame(parent, fg_color=BG)
+        wrap.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(wrap, text=title, font=ctk.CTkFont(size=22, weight="bold"),
+                      text_color=FG).pack(side="left")
+        ctk.CTkLabel(wrap, text=sub, text_color=MUTED, font=F(F_BODY),
+                      wraplength=560).pack(side="left", padx=(14, 0))
+        return wrap
+
+    @staticmethod
+    def card(parent, title: str, hint: str = ""):
+        c = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=R_CARD,
+                         border_width=1, border_color=CARD_BORDER)
+        c.pack(fill="x", pady=(0, GAP))
+        _card_hover(c)
+        ctk.CTkLabel(c, text=title, font=ctk.CTkFont(size=F_SECTION, weight="bold"),
+                      text_color=FG).pack(anchor="w", padx=INNER_PAD, pady=(INNER_PAD, 0))
+        if hint:
+            ctk.CTkLabel(c, text=hint, text_color=MUTED, font=F(F_CAPTION),
+                          wraplength=640).pack(anchor="w", padx=INNER_PAD, pady=(2, 0))
+        body = ctk.CTkFrame(c, fg_color=CARD)
+        body.pack(fill="x", padx=INNER_PAD, pady=(8, INNER_PAD))
+        return body
+
 # Type scale — single source of truth (dark-mode-oled: min 10px readable)
 F_TITLE = 20    # page titles, bold
 F_SECTION = 13  # card/section headings, bold
@@ -439,8 +470,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} v{APP_VERSION}")
-        self.geometry("1020x700")
-        self.minsize(800, 550)
+        self.geometry("1120x740")
+        self.minsize(920, 600)
         self.configure(fg_color=BG)
         self._apply_window_icon()
         try:  # stay out of the way: below-normal priority so captures/fades
@@ -511,7 +542,7 @@ class App(ctk.CTk):
             "settings": self._page_settings,
         }
         self._pages: dict[str, ctk.CTkFrame] = {}
-        self._build_sidebar()
+        self._build_shell()
         self._build_pages()
         self._show_page("devices")
 
@@ -544,95 +575,135 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    # ── Sidebar — neon rail, staged active-glow, stable states ──
-    def _build_sidebar(self):
-        # deep rail + solid buttons so text always pops on dark (4.5:1+)
-        sb = ctk.CTkFrame(self, width=124, fg_color=SIDEBAR_BG, corner_radius=0,
-                          border_width=1, border_color=CARD_BORDER)
-        sb.pack(side="left", fill="y")
-        sb.pack_propagate(False)
+    # ── Shell — operations dashboard: header + pill nav + status bar ──
+    # (ui-ux-pro-max: Real-Time/Operations pattern — live status on top,
+    # sticky nav, telemetry with text labels, keyboard shortcuts)
+    NAV_PAGES = [
+        ("devices", "Devices"),
+        ("color", "Colors"),
+        ("tune", "Tune"),
+        ("modes", "Modes"),
+        ("timing", "Timer"),
+        ("ambi", "Ambi"),
+        ("settings", "Setup"),
+    ]
 
-        # app mark — violet glow dot + wordmark
-        mark = ctk.CTkFrame(sb, fg_color=SIDEBAR_BG)
-        mark.pack(fill="x", pady=(16, 12))
-        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=F(24, "bold")).pack()
-        ctk.CTkLabel(mark, text="ELF", text_color=FG, font=F(15, "bold")).pack()
-        ctk.CTkLabel(mark, text="AMBILIGHT", text_color=MUTED, font=F(F_MICRO, "bold")).pack()
+    def _build_shell(self):
+        # — header 60px: mark | live orb+hex | conn pill | BT | power | save —
+        hd = ctk.CTkFrame(self, height=60, fg_color=SIDEBAR_BG, corner_radius=0)
+        hd.pack(side="top", fill="x")
+        hd.pack_propagate(False)
+        left = ctk.CTkFrame(hd, fg_color=SIDEBAR_BG)
+        left.pack(side="left", padx=(16, 0))
+        ctk.CTkLabel(left, text="✦", text_color=ACCENT,
+                      font=F(22, "bold")).pack(side="left")
+        tcol = ctk.CTkFrame(left, fg_color=SIDEBAR_BG)
+        tcol.pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(tcol, text="ELF AMBILIGHT", text_color=FG,
+                      font=F(14, "bold")).pack(anchor="w")
+        ctk.CTkLabel(tcol, text=f"v{APP_VERSION}", text_color=MUTED,
+                      font=F(F_MICRO)).pack(anchor="w")
 
+        orb = ctk.CTkFrame(left, fg_color=SIDEBAR_BG)
+        orb.pack(side="left", padx=(20, 0))
+        self.side_dot = ctk.CTkLabel(orb, text="", width=84, height=24,
+                                     fg_color=rgb_hex(*self._color),
+                                     corner_radius=R_PILL, cursor="hand2")
+        self.side_dot.pack(side="left")
+        self.side_dot.bind("<Button-1>", lambda _e: self._show_page("color"))
+        self.side_hex = ctk.CTkLabel(orb, text=rgb_hex(*self._color), width=70,
+                                     font=ctk.CTkFont(family="Consolas", size=11),
+                                     text_color=MUTED, cursor="hand2")
+        self.side_hex.pack(side="left", padx=(8, 0))
+        self.side_hex.bind("<Button-1>", lambda _e: self._show_page("color"))
+
+        right = ctk.CTkFrame(hd, fg_color=SIDEBAR_BG)
+        right.pack(side="right", padx=(0, 16))
+        pill = ctk.CTkFrame(right, fg_color=CARD, corner_radius=R_PILL,
+                            border_width=1, border_color=CARD_BORDER)
+        pill.pack(side="left", padx=(0, 6))
+        self.conn_label = ctk.CTkLabel(pill, text="0", text_color=GREEN,
+                                       font=ctk.CTkFont(size=14, weight="bold"))
+        self.conn_label.pack(side="left", padx=(12, 4), pady=4)
+        ctk.CTkLabel(pill, text="connected", text_color=MUTED,
+                      font=F(F_MICRO)).pack(side="left", padx=(0, 6))
+        self.bt_dot = ctk.CTkLabel(pill, text="BT?", text_color=MUTED,
+                                   font=F(F_MICRO, "bold"))
+        self.bt_dot.pack(side="left", padx=(0, 12), pady=4)
+        ctk.CTkButton(right, text="OFF", width=56, height=32, corner_radius=R_PILL,
+                       fg_color=SIDEBAR_BTN, border_width=1, border_color=RED,
+                       text_color=RED, hover_color="#3A1F2B",
+                       font=ctk.CTkFont(size=11, weight="bold"),
+                       command=lambda: self._send_power(False)).pack(side="left", padx=2)
+        ctk.CTkButton(right, text="ON", width=56, height=32, corner_radius=R_PILL,
+                       fg_color=GREEN, hover_color="#3dd68c", text_color="#071018",
+                       font=ctk.CTkFont(size=11, weight="bold"),
+                       command=lambda: self._send_power(True)).pack(side="left", padx=2)
+        self.save_btn = ctk.CTkButton(right, text="Save", width=110, height=36,
+                                      corner_radius=R_PILL, fg_color=ACTION,
+                                      hover_color=ACTION_HOVER, text_color="#FFFFFF",
+                                      font=ctk.CTkFont(size=13, weight="bold"),
+                                      command=self._save_all)
+        self.save_btn.pack(side="left", padx=(8, 0))
+        ctk.CTkFrame(self, height=1, fg_color=CARD_BORDER,
+                      corner_radius=0).pack(side="top", fill="x")
+
+        # — nav strip 56px: underline-tab pills + Alt+1..7 shortcuts —
+        nav = ctk.CTkFrame(self, height=56, fg_color=BG, corner_radius=0)
+        nav.pack(side="top", fill="x", padx=PAD)
+        nav.pack_propagate(False)
         self._page_btns: dict[str, ctk.CTkButton] = {}
         self._page_indicators: dict[str, ctk.CTkFrame] = {}
         self._nav_anim_after = None
-        pages = [
-            ("devices", "Devices"),
-            ("color", "Colors"),
-            ("tune", "Tune"),
-            ("modes", "Modes"),
-            ("timing", "Timer"),
-            ("ambi", "Ambi"),
-            ("settings", "Setup"),
-        ]
-        for key, label in pages:
-            row = ctk.CTkFrame(sb, fg_color=SIDEBAR_BG)
-            row.pack(fill="x", padx=10, pady=3)
-            ind = ctk.CTkFrame(row, width=4, height=40, fg_color=SIDEBAR_BG, corner_radius=2)
-            ind.pack(side="left", padx=(0, 8))
-            ind.pack_propagate(False)
+        for i, (key, label) in enumerate(self.NAV_PAGES):
+            col = ctk.CTkFrame(nav, fg_color=BG)
+            col.pack(side="left", padx=3)
+            ind = ctk.CTkFrame(col, height=3, fg_color=BG, corner_radius=2)
+            ind.pack(fill="x", pady=(6, 4))
             self._page_indicators[key] = ind
-            b = ctk.CTkButton(
-                row, text=label, height=40, corner_radius=R_BUTTON,
-                fg_color=SIDEBAR_BTN, hover_color=SIDEBAR_BTN_HOVER,
-                text_color=FG,
-                anchor="w",
-                font=F(F_SECTION, "bold"),
-                command=lambda k=key: self._show_page(k),
-            )
-            b.pack(side="left", fill="x", expand=True)
-            # pressed flash: instant tactile feedback, bounds never change
+            b = ctk.CTkButton(col, text=f"{i + 1}  {label}", height=32,
+                              corner_radius=R_PILL, fg_color=SIDEBAR_BTN,
+                              hover_color=SIDEBAR_BTN_HOVER, text_color=FG,
+                              font=F(F_BODY, "bold"),
+                              command=lambda k=key: self._show_page(k))
+            b.pack()
             b.bind("<ButtonPress-1>",
-                   lambda _e, k=key: self._nav_press_flash(k),
-                   add="+")
+                   lambda _e, k=key: self._nav_press_flash(k), add="+")
             self._page_btns[key] = b
+            self.bind(f"<Alt-Key-{i + 1}>", lambda _e, k=key: self._show_page(k))
+        ctk.CTkFrame(self, height=1, fg_color=CARD_BORDER,
+                      corner_radius=0).pack(side="top", fill="x")
 
-        # bottom info strip: live color dot + connections + BT (dot + text, never color-only)
-        info = ctk.CTkFrame(sb, fg_color=CARD, corner_radius=R_CARD, border_width=1, border_color=CARD_BORDER)
-        info.pack(side="bottom", padx=10, pady=(8, 6), fill="x")
-        self.side_dot = ctk.CTkLabel(info, text="", width=56, height=18,
-                                     fg_color=rgb_hex(*self._color), corner_radius=R_PILL,
-                                     cursor="hand2")
-        self.side_dot.pack(pady=(10, 4))
-        self.side_dot.bind("<Button-1>", lambda _e: self._show_page("color"))
-        self.conn_label = ctk.CTkLabel(
-            info, text="0", text_color=GREEN,
-            font=ctk.CTkFont(size=16, weight="bold"),
-        )
-        self.conn_label.pack()
-        ctk.CTkLabel(info, text="connected", text_color=MUTED, font=F(F_MICRO)).pack(pady=(0, 4))
-        self.bt_dot = ctk.CTkLabel(info, text="BT?", text_color=MUTED,
-                                   font=F(F_MICRO, "bold"))
-        self.bt_dot.pack(pady=(0, 10))
+        # — status bar 30px: BT · ambi · last message · version —
+        ctk.CTkFrame(self, height=1, fg_color=CARD_BORDER,
+                      corner_radius=0).pack(side="bottom", fill="x")
+        st = ctk.CTkFrame(self, height=30, fg_color=SIDEBAR_BG, corner_radius=0)
+        st.pack(side="bottom", fill="x")
+        st.pack_propagate(False)
+        self._status_bt = ctk.CTkLabel(st, text="BT: …", text_color=MUTED, font=F(F_MICRO))
+        self._status_bt.pack(side="left", padx=(16, 12))
+        self._status_ambi = ctk.CTkLabel(st, text="Ambi: idle", text_color=MUTED, font=F(F_MICRO))
+        self._status_ambi.pack(side="left", padx=(0, 12))
+        self._status_msg = ctk.CTkLabel(st, text="Ready", text_color=MUTED_DIM, font=F(F_MICRO))
+        self._status_msg.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(st, text=f"v{APP_VERSION}", text_color=MUTED_DIM,
+                      font=F(F_MICRO)).pack(side="right", padx=(0, 16))
 
-        # power + save — pill, equal spacing, 8dp rhythm
-        pwr = ctk.CTkFrame(sb, fg_color=SIDEBAR_BG)
-        pwr.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
-        ctk.CTkButton(
-            pwr, text="OFF", height=32, corner_radius=R_PILL,
-            fg_color=SIDEBAR_BTN, border_width=1, border_color=RED, text_color=RED, hover_color="#3A1F2B",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            command=lambda: self._send_power(False),
-        ).pack(fill="x", pady=2)
-        ctk.CTkButton(
-            pwr, text="ON", height=32, corner_radius=R_PILL,
-            fg_color=GREEN, hover_color="#3dd68c", text_color="#071018",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            command=lambda: self._send_power(True),
-        ).pack(fill="x", pady=2)
-        self.save_btn = ctk.CTkButton(
-            sb, text="Save", height=40, corner_radius=R_PILL,
-            fg_color=ACTION, hover_color=ACTION_HOVER, text_color="#FFFFFF",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._save_all,
-        )
-        self.save_btn.pack(side="bottom", fill="x", padx=10, pady=(8, 12))
+    def _status(self, msg=None, bt=None, ambi=None):
+        """Status-bar mirror: last log line + BT/ambi state (text, never color-only)."""
+        try:
+            if msg is not None and hasattr(self, "_status_msg"):
+                self._status_msg.configure(text=str(msg)[:110])
+            if bt is not None and hasattr(self, "_status_bt"):
+                self._status_bt.configure(
+                    text=f"BT: {bt[0]}",
+                    text_color=GREEN if bt[1] == "on" else (RED if bt[1] == "off" else MUTED))
+            if ambi is not None and hasattr(self, "_status_ambi"):
+                self._status_ambi.configure(
+                    text=f"Ambi: {ambi[0]}",
+                    text_color=GREEN if ambi[1] == "on" else MUTED)
+        except Exception:
+            pass
 
     PAGE_TITLES = {"devices": "Devices", "color": "Color", "tune": "Tune Colors",
                    "modes": "Modes", "timing": "Timing", "ambi": "Ambilight",
@@ -682,7 +753,7 @@ class App(ctk.CTk):
                                 hover_color=ACCENT_HOVER if on else SIDEBAR_BTN_HOVER)
                     ind = self._page_indicators.get(k)
                     if ind is not None:
-                        ind.configure(fg_color=ACCENT if on else SIDEBAR_BG)
+                        ind.configure(fg_color=ACCENT if on else BG)
                 return
             steps = MOTION_STEPS_NORMAL
             step_ms = max(16, DURATION_NORMAL // steps)
@@ -694,8 +765,8 @@ class App(ctk.CTk):
                         on = k == active
                         end_btn = ACCENT if on else SIDEBAR_BTN
                         start_btn = SIDEBAR_BTN if on else ACCENT
-                        end_ind = ACCENT if on else SIDEBAR_BG
-                        start_ind = SIDEBAR_BG if on else ACCENT
+                        end_ind = ACCENT if on else BG
+                        start_ind = BG if on else ACCENT
                         try:
                             cur = b.cget("fg_color")
                             src = cur if isinstance(cur, str) and cur.startswith("#") else start_btn
@@ -975,7 +1046,7 @@ class App(ctk.CTk):
     def _build_pages(self, prewarm: bool = True):
         if not hasattr(self, "_content") or not str(getattr(self, "_content", None)) or str(self._content.winfo_exists()) != "1":
             self._content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-            self._content.pack(side="left", fill="both", expand=True)
+            self._content.pack(side="top", fill="both", expand=True)
             self._content.pack_propagate(False)
             self._content.grid_propagate(False)
             # ambient light-line: 3px glow strip tinted by the live color
@@ -1007,6 +1078,7 @@ class App(ctk.CTk):
     def _log(self, msg: str):
         try:
             ts = datetime.now().strftime("%H:%M:%S")
+            self._status(msg=msg)
             if hasattr(self, "_log_box"):
                 self._log_box.configure(state="normal")
                 self._log_box.insert("end", f"[{ts}] {msg}\n")
@@ -1258,10 +1330,13 @@ class App(ctk.CTk):
         try:
             if running:
                 self.bt_dot.configure(text="BT", text_color=GREEN)
+                self._status(bt=("on", "on"))
             elif running is False:
                 self.bt_dot.configure(text="BT!", text_color=RED)
+                self._status(bt=("off", "off"))
             else:
                 self.bt_dot.configure(text="BT?", text_color=MUTED)
+                self._status(bt=("unknown", "unknown"))
         except Exception:
             pass
         try:
@@ -1411,10 +1486,7 @@ class App(ctk.CTk):
         f = ctk.CTkFrame(self._page_host, fg_color="transparent")
 
         # header
-        h = ctk.CTkFrame(f, fg_color="transparent")
-        h.pack(fill="x", pady=(0, 8))
-        ctk.CTkLabel(h, text="Devices", font=ctk.CTkFont(size=20, weight="bold"),
-                      text_color=FG).pack(side="left")
+        h = _ShellSections.hero(f, "Devices", "Scan, connect, and group your strips.")
         self.dev_status = ctk.CTkLabel(h, text="", text_color=MUTED,
                                         font=ctk.CTkFont(size=12))
         self.dev_status.pack(side="right")
@@ -1829,8 +1901,7 @@ class App(ctk.CTk):
         body = ctk.CTkScrollableFrame(f, fg_color="transparent")
         body.pack(fill="both", expand=True)
 
-        ctk.CTkLabel(body, text="Color", font=ctk.CTkFont(size=20, weight="bold"),
-                      text_color=FG).pack(anchor="w", pady=(0, 8))
+        _ShellSections.hero(body, "Colors", "Live color, brightness, and white channels.")
 
         top = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10,
                            border_width=1, border_color=ACCENT_DIM)
@@ -2177,6 +2248,7 @@ class App(ctk.CTk):
         self._rgb_b_lbl.configure(text=str(b))
         try:
             self.side_dot.configure(fg_color=hx)
+            self.side_hex.configure(text=hx)
         except Exception:
             pass
         try:
@@ -2253,11 +2325,7 @@ class App(ctk.CTk):
         f = ctk.CTkFrame(self._page_host, fg_color="transparent")
         body = ctk.CTkScrollableFrame(f, fg_color="transparent")
         body.pack(fill="both", expand=True)
-        ctk.CTkLabel(body, text="Tune Colors", font=ctk.CTkFont(size=20, weight="bold"),
-                      text_color=FG).pack(anchor="w", pady=(0, 4))
-        ctk.CTkLabel(body, text="Start with the White balance helper below, or drag sliders "
-                                "directly. Per-color sliders remap pure R/G/B/W. Edits stage until Save.",
-                       text_color=MUTED, wraplength=700).pack(anchor="w", pady=(0, 8))
+        _ShellSections.hero(body, "Tune", "White-balance helper, gains, per-color output, profiles. Edits stage until Save.")
 
         # White balance helper — guided: show white, tap the offending tint, repeat.
         wb = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10)
@@ -2756,8 +2824,7 @@ class App(ctk.CTk):
     # ════════════════════════════════════════════════════════════════
     def _page_modes(self) -> ctk.CTkFrame:
         f = ctk.CTkFrame(self._page_host, fg_color="transparent")
-        ctk.CTkLabel(f, text="Modes", font=ctk.CTkFont(size=20, weight="bold"),
-                      text_color=FG).pack(anchor="w", pady=(0, 8))
+        _ShellSections.hero(f, "Modes", "29 strip effects with speed and brightness.")
 
         left = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         left.pack(side="left", fill="both", expand=True, padx=(0, 8))
@@ -2842,8 +2909,7 @@ class App(ctk.CTk):
     # ════════════════════════════════════════════════════════════════
     def _page_timing(self) -> ctk.CTkFrame:
         f = ctk.CTkFrame(self._page_host, fg_color="transparent")
-        ctk.CTkLabel(f, text="Timing", font=ctk.CTkFont(size=20, weight="bold"),
-                      text_color=FG).pack(anchor="w", pady=(0, 8))
+        _ShellSections.hero(f, "Timing", "Timers and schedules that run on the strip.")
 
         self._t1_h = ctk.IntVar(value=self.cfg.t1_hour)
         self._t1_m = ctk.IntVar(value=self.cfg.t1_min)
@@ -3051,12 +3117,7 @@ class App(ctk.CTk):
     # ════════════════════════════════════════════════════════════════
     def _page_ambi(self) -> ctk.CTkFrame:
         f = ctk.CTkFrame(self._page_host, fg_color="transparent")
-        ctk.CTkLabel(f, text="Ambilight", font=ctk.CTkFont(size=20, weight="bold"),
-                      text_color=FG).pack(anchor="w", pady=(0, 4))
-        ctk.CTkLabel(f, text="Screen average \u2192 realtime BLE packets. Calibration applied. "
-                              "Both modes are 60fps capable — low-res 50px capture (dxcam when available).",
-                      text_color=MUTED, wraplength=700).pack(anchor="w", pady=(0, 8))
-
+        _ShellSections.hero(f, "Ambilight", "Screen-sync lighting with crossfade, presets, and eco mode.")
         row = ctk.CTkFrame(f, fg_color=CARD, corner_radius=10)
         row.pack(fill="x", pady=(0, 8))
         self.ambi_btn = ctk.CTkButton(row, text="Start Ambilight", corner_radius=8, width=130,
@@ -3531,6 +3592,7 @@ class App(ctk.CTk):
         if self.ambilight.running:
             self.runner.submit(self.ambilight.stop())
             self.ambi_btn.configure(text="Start Ambilight", fg_color=GREEN, hover_color="#2ea44f")
+            self._status(ambi=("idle", "off"))
             self._log("Ambilight stopped.")
             return
         if not self._targets():
@@ -3573,6 +3635,7 @@ class App(ctk.CTk):
             self._log(f"Ambilight failed to start: {e}")
             return
         self.ambi_btn.configure(text="Stop Ambilight", fg_color=RED, hover_color="#b91c1c")
+        self._status(ambi=("live", "on"))
         self._log(f"Ambilight started @ {self.ambilight.fps:.0f}fps "
                   f"({self.ambilight.capture_mode}/{self.ambilight.sample_mode})")
         self._ambi_tick()
@@ -3613,6 +3676,11 @@ class App(ctk.CTk):
         if getattr(self, "_ambi_prev_hex", None) != hx:
             self._ambi_preview.configure(fg_color=hx)
             self._ambi_prev_hex = hx
+            try:
+                self.side_dot.configure(fg_color=hx)
+                self.side_hex.configure(text=hx)
+            except Exception:
+                pass
             try:
                 if getattr(self, "_glow_hx", None) != hx:
                     self._glow_set(hx, animate=True)
@@ -3671,8 +3739,7 @@ class App(ctk.CTk):
     # ════════════════════════════════════════════════════════════════
     def _page_settings(self) -> ctk.CTkFrame:
         f = ctk.CTkFrame(self._page_host, fg_color="transparent")
-        ctk.CTkLabel(f, text="Settings", font=ctk.CTkFont(size=20, weight="bold"),
-                      text_color=FG).pack(anchor="w", pady=(0, 8))
+        _ShellSections.hero(f, "Setup", "Startup, Bluetooth, Dynamic Lighting, appearance.")
         body = ctk.CTkScrollableFrame(f, fg_color="transparent")
         body.pack(fill="both", expand=True)
 
