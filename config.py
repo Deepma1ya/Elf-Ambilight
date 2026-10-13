@@ -89,6 +89,7 @@ class Config:
     quit_on_close: bool = False  # False = close minimizes to tray
     start_minimized: bool = False
     live_send: bool = True
+    reduce_motion: bool = False  # True = instant transitions, no staged animation
 
     # startup behavior
     bt_on_startup: bool = False

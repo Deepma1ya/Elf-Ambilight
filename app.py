@@ -4,6 +4,7 @@ import asyncio
 import colorsys
 import ctypes
 import json
+import os
 import sys
 import threading
 import time
@@ -67,32 +68,41 @@ APP_NAME = "Elf-Ambilight"
 APP_VERSION = "1.1.0"
 
 
-# ── Theme — Modern Design System (Minimalism & Swiss, dark cinematic) ──
+# ── Theme — Elf-Ambilight "Neon OLED" design system ──
+# Verified via ui-ux-pro-max: OLED dark-mode (deep black, minimal glow,
+# vibrant neon accents) + gaming palette (violet primary, rose action).
+# Rules applied: 150-300ms hovers, stable states (no layout shift),
+# 4.5:1 text contrast, visible focus, reduced-motion support.
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# Design tokens — deep navy/charcoal cinematic dark, neon indigo accent
-BG = "#0B0F19"          # --color-background, deep navy (not pure black)
-SIDEBAR = "#070B14"     # darker than BG for depth
-CARD = "#141B2E"        # --color-card, frosted layer above BG
-CARD_HOVER = "#1B2440"
-CARD_BORDER = "#26314d" # crisper edge so cards lift off the background
-ACCENT = "#6366F1"      # neon indigo — vibrant for RGB app
-ACCENT_DIM = "#4338CA"  # --color-accent deep indigo
-ACCENT_HOVER = "#5558FF"
+# Design tokens — OLED gaming dark, neon violet + rose
+BG = "#0F0F23"          # app background, deep violet-black (OLED friendly)
+SIDEBAR = "#0B0B1A"     # darker rail for depth
+CARD = "#1E1C35"        # card surface above BG
+CARD_HOVER = "#262244"
+CARD_BORDER = "#3B3670" # visible in both themes, lifts cards off BG
+CARD_BORDER_HOVER = "#5B54A6"
+ACCENT = "#7C3AED"      # neon violet primary
+ACCENT_DIM = "#5B21B6"  # deep violet for secondary buttons
+ACCENT_HOVER = "#8B5CF6"
+ACCENT_SOFT = "#2A2350" # soft violet fill for active nav / chips
+SECONDARY = "#A78BFA"   # light violet for highlights
+ACTION = "#F43F5E"      # rose for primary CTA (Save, Start)
+ACTION_HOVER = "#FB7185"
 GREEN = "#4ade80"
 RED = "#f87171"
 YELLOW = "#fbbf24"
-FG = "#F1F5F9"          # --color-foreground, crisper
-MUTED = "#94A3B8"       # --color-muted-foreground
+FG = "#E2E8F0"          # high-contrast foreground
+MUTED = "#94A3B8"       # secondary text (>=4.5:1 on CARD)
 MUTED_DIM = "#64748b"
-ENTRY_BG = "#070A12"
-SURFACE = "#0F1626"     # --color-muted
-SIDEBAR_BG = "#0D1322"  # --color-sidebar
-SIDEBAR_BTN = "#161E33" # --color-sidebar-button
-SIDEBAR_BTN_HOVER = "#1F2A45"
+ENTRY_BG = "#0B0B1A"
+SURFACE = "#27273B"
+SIDEBAR_BG = "#0B0B1A"
+SIDEBAR_BTN = "#1E1C35" # solid so text always pops
+SIDEBAR_BTN_HOVER = "#262244"
 
-# Spacing & radius — consistent 8dp scale, everything rounded
+# Spacing & radius — 8dp rhythm, everything rounded
 PAD = 16                # base padding (was 12)
 GAP = 12                # between cards
 INNER_PAD = 12
@@ -101,10 +111,78 @@ R_BUTTON = 12           # button
 R_SMALL = 10            # small controls, sliders track
 R_PILL = 20             # pills, dots
 
-# Motion — 200-250ms subtle, ease-out
-DURATION_FAST = 150
-DURATION_NORMAL = 220
+# Motion — subtle & stable (ui-ux-pro-max: 150-300ms, ease-out,
+# exit faster than enter, never shift layout, respect reduced-motion)
+DURATION_FAST = 120     # exits, indicator snaps
+DURATION_NORMAL = 200   # hovers, page entrances
+DURATION_SLOW = 280     # hero glow, large fades
 EASE = "ease-out"
+MOTION_STEPS_FAST = 4   # frame counts for staged lerps (cheap on Tk)
+MOTION_STEPS_NORMAL = 6
+
+def _motion_enabled() -> bool:
+    """Reduced-motion: env/setting kill-switch for all staged animation."""
+    try:
+        if os.environ.get("ELF_NO_ANIM") == "1":
+            return False
+    except Exception:
+        pass
+    try:
+        from config import Config as _C
+        return not bool(getattr(_C.load(), "reduce_motion", False))
+    except Exception:
+        return True
+
+
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def _ease_out(t: float) -> float:
+    t = max(0.0, min(1.0, t))
+    return 1.0 - (1.0 - t) * (1.0 - t)
+
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    try:
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    except Exception:
+        return (124, 58, 237)
+
+
+def _rgb_to_hex(r: int, g: int, b: int) -> str:
+    return "#%02X%02X%02X" % (max(0, min(255, int(r))),
+                              max(0, min(255, int(g))),
+                              max(0, min(255, int(b))))
+
+
+def _mix_hex(h1: str, h2: str, t: float) -> str:
+    a, b = _hex_to_rgb(h1), _hex_to_rgb(h2)
+    t = max(0.0, min(1.0, t))
+    return _rgb_to_hex(_lerp(a[0], b[0], t), _lerp(a[1], b[1], t),
+                       _lerp(a[2], b[2], t))
+
+
+def _focus_ring(widget, normal: str = CARD_BORDER, focus: str = ACCENT):
+    """Visible keyboard focus (ui-ux-pro-max: never rely on color alone,
+    focus must be independently visible). No-op on widgets w/o borders."""
+    try:
+        widget.bind("<FocusIn>",
+                    lambda _e: widget.configure(border_color=focus), add="+")
+        widget.bind("<FocusOut>",
+                    lambda _e: widget.configure(border_color=normal), add="+")
+    except Exception:
+        pass
+
+
+def _card_hover(card, normal: str = CARD_BORDER, hover: str = CARD_BORDER_HOVER):
+    """Border-only hover lift — bounds never change, so no layout shift."""
+    try:
+        card.bind("<Enter>", lambda _e: card.configure(border_color=hover), add="+")
+        card.bind("<Leave>", lambda _e: card.configure(border_color=normal), add="+")
+    except Exception:
+        pass
 
 # Type scale — single source of truth (dark-mode-oled: min 10px readable)
 F_TITLE = 20    # page titles, bold
@@ -466,23 +544,24 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    # ── Sidebar — high-contrast, readable nav ─────────────────
+    # ── Sidebar — neon rail, staged active-glow, stable states ──
     def _build_sidebar(self):
-        # deep sidebar, solid buttons so text always pops on dark
-        sb = ctk.CTkFrame(self, width=92, fg_color=SIDEBAR_BG, corner_radius=0, border_width=1, border_color=CARD_BORDER)
+        # deep rail + solid buttons so text always pops on dark (4.5:1+)
+        sb = ctk.CTkFrame(self, width=124, fg_color=SIDEBAR_BG, corner_radius=0,
+                          border_width=1, border_color=CARD_BORDER)
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
 
-        # app mark — larger, crisper
-        mark = ctk.CTkFrame(sb, fg_color="transparent")
+        # app mark — violet glow dot + wordmark
+        mark = ctk.CTkFrame(sb, fg_color=SIDEBAR_BG)
         mark.pack(fill="x", pady=(16, 12))
-        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=F(22, "bold")).pack()
-        ctk.CTkLabel(mark, text="ELF", text_color=FG, font=F(14, "bold")).pack()
+        ctk.CTkLabel(mark, text="✦", text_color=ACCENT, font=F(24, "bold")).pack()
+        ctk.CTkLabel(mark, text="ELF", text_color=FG, font=F(15, "bold")).pack()
         ctk.CTkLabel(mark, text="AMBILIGHT", text_color=MUTED, font=F(F_MICRO, "bold")).pack()
 
         self._page_btns: dict[str, ctk.CTkButton] = {}
         self._page_indicators: dict[str, ctk.CTkFrame] = {}
-        # clean labels only — unicode icons were rendering poorly on some Windows fonts and crowding the text
+        self._nav_anim_after = None
         pages = [
             ("devices", "Devices"),
             ("color", "Colors"),
@@ -493,29 +572,34 @@ class App(ctk.CTk):
             ("settings", "Setup"),
         ]
         for key, label in pages:
-            row = ctk.CTkFrame(sb, fg_color="transparent")
-            row.pack(fill="x", padx=8, pady=3)
-            ind = ctk.CTkFrame(row, width=3, height=38, fg_color="transparent", corner_radius=2)
+            row = ctk.CTkFrame(sb, fg_color=SIDEBAR_BG)
+            row.pack(fill="x", padx=10, pady=3)
+            ind = ctk.CTkFrame(row, width=4, height=40, fg_color=SIDEBAR_BG, corner_radius=2)
             ind.pack(side="left", padx=(0, 8))
+            ind.pack_propagate(False)
             self._page_indicators[key] = ind
             b = ctk.CTkButton(
-                row, text=label, width=70, height=38, corner_radius=R_BUTTON,
-                fg_color=SIDEBAR_BTN, hover_color=SIDEBAR_BTN_HOVER,  # subtle solid bg so text always pops
-                text_color=FG,  # max contrast on dark
+                row, text=label, height=40, corner_radius=R_BUTTON,
+                fg_color=SIDEBAR_BTN, hover_color=SIDEBAR_BTN_HOVER,
+                text_color=FG,
                 anchor="w",
                 font=F(F_SECTION, "bold"),
                 command=lambda k=key: self._show_page(k),
             )
             b.pack(side="left", fill="x", expand=True)
+            # pressed flash: instant tactile feedback, bounds never change
+            b.bind("<ButtonPress-1>",
+                   lambda _e, k=key: self._nav_press_flash(k),
+                   add="+")
             self._page_btns[key] = b
 
-        # bottom info strip: live color dot + connections + BT
+        # bottom info strip: live color dot + connections + BT (dot + text, never color-only)
         info = ctk.CTkFrame(sb, fg_color=CARD, corner_radius=R_CARD, border_width=1, border_color=CARD_BORDER)
-        info.pack(side="bottom", padx=8, pady=(8, 6), fill="x")
-        self.side_dot = ctk.CTkLabel(info, text="", width=48, height=16,
+        info.pack(side="bottom", padx=10, pady=(8, 6), fill="x")
+        self.side_dot = ctk.CTkLabel(info, text="", width=56, height=18,
                                      fg_color=rgb_hex(*self._color), corner_radius=R_PILL,
                                      cursor="hand2")
-        self.side_dot.pack(pady=(8, 4))
+        self.side_dot.pack(pady=(10, 4))
         self.side_dot.bind("<Button-1>", lambda _e: self._show_page("color"))
         self.conn_label = ctk.CTkLabel(
             info, text="0", text_color=GREEN,
@@ -525,30 +609,30 @@ class App(ctk.CTk):
         ctk.CTkLabel(info, text="connected", text_color=MUTED, font=F(F_MICRO)).pack(pady=(0, 4))
         self.bt_dot = ctk.CTkLabel(info, text="BT?", text_color=MUTED,
                                    font=F(F_MICRO, "bold"))
-        self.bt_dot.pack(pady=(0, 8))
+        self.bt_dot.pack(pady=(0, 10))
 
-        # power + save — pill, equal spacing, 8dp
-        pwr = ctk.CTkFrame(sb, fg_color="transparent")
-        pwr.pack(side="bottom", fill="x", padx=8, pady=(0, 4))
+        # power + save — pill, equal spacing, 8dp rhythm
+        pwr = ctk.CTkFrame(sb, fg_color=SIDEBAR_BG)
+        pwr.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
         ctk.CTkButton(
-            pwr, text="OFF", height=28, corner_radius=R_PILL,
-            fg_color="transparent", border_width=1, border_color=RED, text_color=RED, hover_color="#2a1a1a",
+            pwr, text="OFF", height=32, corner_radius=R_PILL,
+            fg_color=SIDEBAR_BTN, border_width=1, border_color=RED, text_color=RED, hover_color="#3A1F2B",
             font=ctk.CTkFont(size=11, weight="bold"),
             command=lambda: self._send_power(False),
         ).pack(fill="x", pady=2)
         ctk.CTkButton(
-            pwr, text="ON", height=28, corner_radius=R_PILL,
+            pwr, text="ON", height=32, corner_radius=R_PILL,
             fg_color=GREEN, hover_color="#3dd68c", text_color="#071018",
             font=ctk.CTkFont(size=11, weight="bold"),
             command=lambda: self._send_power(True),
         ).pack(fill="x", pady=2)
         self.save_btn = ctk.CTkButton(
-            sb, text="Save", height=36, corner_radius=R_PILL,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=FG,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            sb, text="Save", height=40, corner_radius=R_PILL,
+            fg_color=ACTION, hover_color=ACTION_HOVER, text_color="#FFFFFF",
+            font=ctk.CTkFont(size=13, weight="bold"),
             command=self._save_all,
         )
-        self.save_btn.pack(side="bottom", fill="x", padx=8, pady=(8, 12))
+        self.save_btn.pack(side="bottom", fill="x", padx=10, pady=(8, 12))
 
     PAGE_TITLES = {"devices": "Devices", "color": "Color", "tune": "Tune Colors",
                    "modes": "Modes", "timing": "Timing", "ambi": "Ambilight",
@@ -567,15 +651,76 @@ class App(ctk.CTk):
             return
         self._do_show(name)
 
+    def _nav_press_flash(self, key: str):
+        """Tactile press feedback: brief soft-violet flash, bounds unchanged."""
+        try:
+            b = self._page_btns.get(key)
+            if b is None:
+                return
+            is_active = (key == self._current_page)
+            b.configure(fg_color=ACCENT_SOFT)
+            ms = 0 if not _motion_enabled() else 90
+            self.after(ms, lambda: self._animate_sidebar(self._current_page or key))
+        except Exception:
+            pass
+
     def _animate_sidebar(self, active: str):
-        for k, b in self._page_btns.items():
-            is_active = k == active
-            b.configure(fg_color=ACCENT if is_active else SIDEBAR_BTN,
-                        text_color=FG,
-                        hover_color=ACCENT_HOVER if is_active else SIDEBAR_BTN_HOVER)
-            ind = self._page_indicators.get(k)
-            if ind is not None:
-                ind.configure(fg_color=ACCENT if is_active else "transparent")
+        # staged active-glow: indicator + button ease toward their end
+        # colors over ~200ms; instant when reduced-motion is on.
+        try:
+            if self._nav_anim_after is not None:
+                try:
+                    self.after_cancel(self._nav_anim_after)
+                except Exception:
+                    pass
+                self._nav_anim_after = None
+            if not _motion_enabled():
+                for k, b in self._page_btns.items():
+                    on = k == active
+                    b.configure(fg_color=ACCENT if on else SIDEBAR_BTN,
+                                text_color="#FFFFFF" if on else FG,
+                                hover_color=ACCENT_HOVER if on else SIDEBAR_BTN_HOVER)
+                    ind = self._page_indicators.get(k)
+                    if ind is not None:
+                        ind.configure(fg_color=ACCENT if on else SIDEBAR_BG)
+                return
+            steps = MOTION_STEPS_NORMAL
+            step_ms = max(16, DURATION_NORMAL // steps)
+
+            def _frame(i: int):
+                try:
+                    t = _ease_out(i / steps)
+                    for k, b in self._page_btns.items():
+                        on = k == active
+                        end_btn = ACCENT if on else SIDEBAR_BTN
+                        start_btn = SIDEBAR_BTN if on else ACCENT
+                        end_ind = ACCENT if on else SIDEBAR_BG
+                        start_ind = SIDEBAR_BG if on else ACCENT
+                        try:
+                            cur = b.cget("fg_color")
+                            src = cur if isinstance(cur, str) and cur.startswith("#") else start_btn
+                        except Exception:
+                            src = start_btn
+                        b.configure(fg_color=_mix_hex(src, end_btn, t),
+                                    text_color="#FFFFFF" if on else FG,
+                                    hover_color=ACCENT_HOVER if on else SIDEBAR_BTN_HOVER)
+                        ind = self._page_indicators.get(k)
+                        if ind is not None:
+                            try:
+                                icur = ind.cget("fg_color")
+                                isrc = icur if isinstance(icur, str) and icur.startswith("#") else start_ind
+                            except Exception:
+                                isrc = start_ind
+                            ind.configure(fg_color=_mix_hex(isrc, end_ind, t))
+                    if i < steps:
+                        self._nav_anim_after = self.after(step_ms, lambda: _frame(i + 1))
+                    else:
+                        self._nav_anim_after = None
+                except Exception:
+                    self._nav_anim_after = None
+            _frame(1)
+        except Exception:
+            pass
 
     def _do_show(self, name: str):
         self._current_page = name
@@ -586,6 +731,57 @@ class App(ctk.CTk):
         except Exception:
             pf.grid(row=0, column=0, sticky="nsew", padx=PAD, pady=PAD)
             pf.tkraise()
+        self._glow_pulse()
+
+    # ── Ambient glow — 3px light-line under the header, tinted by the live
+    # strip color (OLED: minimal glow, change-gated, zero layout shift) ──
+    def _glow_pulse(self):
+        """Quick bright blink on page switch; instant if reduced-motion."""
+        try:
+            if not hasattr(self, "_glow"):
+                return
+            if not _motion_enabled():
+                return
+            try:
+                base = self._glow.cget("fg_color")
+                base = base if isinstance(base, str) and base.startswith("#") else BG
+            except Exception:
+                base = BG
+            self._glow.configure(fg_color=ACCENT)
+            self.after(DURATION_FAST, lambda: self._glow_set(base, animate=True))
+        except Exception:
+            pass
+
+    def _glow_set(self, hx: str, animate: bool = True):
+        """Ease the glow line toward hx; change-gated by callers."""
+        try:
+            if not hasattr(self, "_glow"):
+                return
+            if not animate or not _motion_enabled():
+                self._glow.configure(fg_color=hx)
+                self._glow_hx = hx
+                return
+            try:
+                cur = self._glow.cget("fg_color")
+                cur = cur if isinstance(cur, str) and cur.startswith("#") else BG
+            except Exception:
+                cur = BG
+            steps = MOTION_STEPS_FAST
+            step_ms = max(16, DURATION_FAST // steps)
+
+            def _frame(i: int):
+                try:
+                    t = _ease_out(i / steps)
+                    self._glow.configure(fg_color=_mix_hex(cur, hx, t))
+                    if i < steps:
+                        self.after(step_ms, lambda: _frame(i + 1))
+                    else:
+                        self._glow_hx = hx
+                except Exception:
+                    pass
+            _frame(1)
+        except Exception:
+            pass
 
     def _unsaved_popup(self, msg: str, on_save, on_discard):
         top = ctk.CTkToplevel(self)
@@ -619,8 +815,12 @@ class App(ctk.CTk):
         self._refresh_save_btn()
 
     def _refresh_save_btn(self):
+        # dirty affordance is text ("Save ●"), never color-only
         try:
-            self.save_btn.configure(text="Save")
+            if self._dirty:
+                self.save_btn.configure(text="Save ●", fg_color=ACTION_HOVER)
+            else:
+                self.save_btn.configure(text="Save", fg_color=ACTION)
         except Exception:
             pass
 
@@ -720,12 +920,23 @@ class App(ctk.CTk):
         except Exception:
             pass
         self._pages = {}
-        # keep _content, just clear its grid children
-        for ch in list(self._content.winfo_children()):
-            try:
-                ch.destroy()
-            except Exception:
-                pass
+        # keep _content shell (glow + host) — clear only page frames in host
+        try:
+            host = getattr(self, "_page_host", None)
+            if host is not None and str(host.winfo_exists()) == "1":
+                for ch in list(host.winfo_children()):
+                    try:
+                        ch.destroy()
+                    except Exception:
+                        pass
+            else:
+                for ch in list(self._content.winfo_children()):
+                    try:
+                        ch.destroy()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         self._build_pages(prewarm=False)
         # re-ensure current page instantly
         if self._current_page:
@@ -767,6 +978,15 @@ class App(ctk.CTk):
             self._content.pack(side="left", fill="both", expand=True)
             self._content.pack_propagate(False)
             self._content.grid_propagate(False)
+            # ambient light-line: 3px glow strip tinted by the live color
+            self._glow = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0, height=3)
+            self._glow.pack(side="top", fill="x", padx=PAD, pady=(PAD, 0))
+            self._glow.pack_propagate(False)
+            self._glow_hx = BG
+            self._page_host = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
+            self._page_host.pack(side="top", fill="both", expand=True, padx=PAD, pady=(8, PAD))
+            self._page_host.pack_propagate(False)
+            self._page_host.grid_propagate(False)
         if not hasattr(self, "_pages"):
             self._pages = {}
         self._ensure_page("devices")
@@ -1188,7 +1408,7 @@ class App(ctk.CTk):
     # DEVICES PAGE
     # ════════════════════════════════════════════════════════════════
     def _page_devices(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color="transparent")
+        f = ctk.CTkFrame(self._page_host, fg_color="transparent")
 
         # header
         h = ctk.CTkFrame(f, fg_color="transparent")
@@ -1605,7 +1825,7 @@ class App(ctk.CTk):
     # COLOR PAGE
     # ════════════════════════════════════════════════════════════════
     def _page_color(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color="transparent")
+        f = ctk.CTkFrame(self._page_host, fg_color="transparent")
         body = ctk.CTkScrollableFrame(f, fg_color="transparent")
         body.pack(fill="both", expand=True)
 
@@ -1646,8 +1866,10 @@ class App(ctk.CTk):
         ctk.CTkLabel(hex_row, text="Hex", font=ctk.CTkFont(size=12, weight="bold"),
                       text_color=MUTED).pack(side="left", padx=(0, 6))
         self.hex_entry = ctk.CTkEntry(hex_row, width=120, corner_radius=8,
-                                       placeholder_text="#FF8040")
+                                       placeholder_text="#FF8040",
+                                       border_color=CARD_BORDER)
         self.hex_entry.pack(side="left", padx=4)
+        _focus_ring(self.hex_entry)
         self.hex_entry.bind("<Return>", lambda _: self._apply_hex())
         ctk.CTkButton(hex_row, text="Apply", corner_radius=8, width=60,
                        command=self._apply_hex).pack(side="left", padx=4)
@@ -1958,6 +2180,11 @@ class App(ctk.CTk):
         except Exception:
             pass
         try:
+            if getattr(self, "_glow_hx", None) != hx:
+                self._glow_set(hx, animate=True)
+        except Exception:
+            pass
+        try:
             self._cal_refresh_preview()
         except Exception:
             pass
@@ -2023,7 +2250,7 @@ class App(ctk.CTk):
     # TUNE PAGE
     # ════════════════════════════════════════════════════════════════
     def _page_tune(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color="transparent")
+        f = ctk.CTkFrame(self._page_host, fg_color="transparent")
         body = ctk.CTkScrollableFrame(f, fg_color="transparent")
         body.pack(fill="both", expand=True)
         ctk.CTkLabel(body, text="Tune Colors", font=ctk.CTkFont(size=20, weight="bold"),
@@ -2528,7 +2755,7 @@ class App(ctk.CTk):
     # MODES PAGE
     # ════════════════════════════════════════════════════════════════
     def _page_modes(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color="transparent")
+        f = ctk.CTkFrame(self._page_host, fg_color="transparent")
         ctk.CTkLabel(f, text="Modes", font=ctk.CTkFont(size=20, weight="bold"),
                       text_color=FG).pack(anchor="w", pady=(0, 8))
 
@@ -2614,7 +2841,7 @@ class App(ctk.CTk):
     # TIMING PAGE
     # ════════════════════════════════════════════════════════════════
     def _page_timing(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color="transparent")
+        f = ctk.CTkFrame(self._page_host, fg_color="transparent")
         ctk.CTkLabel(f, text="Timing", font=ctk.CTkFont(size=20, weight="bold"),
                       text_color=FG).pack(anchor="w", pady=(0, 8))
 
@@ -2823,7 +3050,7 @@ class App(ctk.CTk):
     # AMBILIGHT PAGE
     # ════════════════════════════════════════════════════════════════
     def _page_ambi(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color="transparent")
+        f = ctk.CTkFrame(self._page_host, fg_color="transparent")
         ctk.CTkLabel(f, text="Ambilight", font=ctk.CTkFont(size=20, weight="bold"),
                       text_color=FG).pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(f, text="Screen average \u2192 realtime BLE packets. Calibration applied. "
@@ -3386,6 +3613,11 @@ class App(ctk.CTk):
         if getattr(self, "_ambi_prev_hex", None) != hx:
             self._ambi_preview.configure(fg_color=hx)
             self._ambi_prev_hex = hx
+            try:
+                if getattr(self, "_glow_hx", None) != hx:
+                    self._glow_set(hx, animate=True)
+            except Exception:
+                pass
         try:
             cache = getattr(self, "_ambi_cand_hex", None)
             if cache is None:
@@ -3438,15 +3670,17 @@ class App(ctk.CTk):
     # SETTINGS PAGE
     # ════════════════════════════════════════════════════════════════
     def _page_settings(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color="transparent")
+        f = ctk.CTkFrame(self._page_host, fg_color="transparent")
         ctk.CTkLabel(f, text="Settings", font=ctk.CTkFont(size=20, weight="bold"),
                       text_color=FG).pack(anchor="w", pady=(0, 8))
         body = ctk.CTkScrollableFrame(f, fg_color="transparent")
         body.pack(fill="both", expand=True)
 
         def _card(title):
-            c = ctk.CTkFrame(body, fg_color=CARD, corner_radius=10)
-            c.pack(fill="x", pady=(0, 8))
+            c = ctk.CTkFrame(body, fg_color=CARD, corner_radius=R_CARD,
+                             border_width=1, border_color=CARD_BORDER)
+            c.pack(fill="x", pady=(0, GAP))
+            _card_hover(c)
             ctk.CTkLabel(c, text=title, font=ctk.CTkFont(size=13, weight="bold"),
                           text_color=MUTED).pack(anchor="w", pady=(0, 6))
             return c
@@ -3533,6 +3767,13 @@ class App(ctk.CTk):
         _toggle(wc, "Close button quits the app instead (skip tray)", self.cfg.quit_on_close,
                 lambda on: (setattr(self.cfg, "quit_on_close", on),
                             self._save_keys({"quit_on_close": on})))
+
+        # ── Appearance ──
+        apc = _card("Appearance")
+        _toggle(apc, "Reduce animations (instant transitions)", self.cfg.reduce_motion,
+                lambda on: (setattr(self.cfg, "reduce_motion", on),
+                            self._save_keys({"reduce_motion": on}),
+                            self._log("Animations " + ("reduced — instant." if on else "restored."))))
 
         # ── Remembered ──
         rc = _card("Remembered devices")
