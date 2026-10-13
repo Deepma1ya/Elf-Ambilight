@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elf-Ambilight</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand"><span class="star">✦</span>
+      <div><div class="name">ELF AMBILIGHT</div><div class="ver" id="appVer">v1.1.0</div></div>
+    </div>
+    <div class="orb-wrap" id="orbWrap" title="Open Colors"><div id="orb"></div><span id="orbHex">#ffffff</span></div>
+    <div class="hspace"></div>
+    <div class="conn-pill"><b id="connCount" class="off">0</b><span>connected</span><span id="btDot" class="unk">BT?</span></div>
+    <button class="btn small pill ghost" id="pwrOff">OFF</button>
+    <button class="btn small pill green" id="pwrOn">ON</button>
+    <button id="saveBtn">Save</button>
+  </header>
+  <div class="hairline"></div>
+  <nav id="nav"></nav>
+  <div class="hairline"></div>
+  <div id="glow"></div>
+  <main id="main">
+    <section class="page" id="pg-devices">
+      <div class="hero"><h1>Devices</h1><p>Scan, connect, and group your strips.</p><div class="right"><span class="badge" id="devStatus">idle</span></div></div>
+      <div class="card"><h2>Scan</h2><p class="hint">Find nearby strips, then connect.</p>
+        <div class="row">
+          <button class="btn primary" id="scanBtn">Scan 5s</button>
+          <button class="btn" id="quickBtn">Quick</button>
+          <button class="btn green" id="connAllBtn">Connect</button>
+          <button class="btn danger" id="disconnBtn">Disconnect</button>
+        </div>
+      </div>
+      <div class="card"><h2>Found</h2><p class="hint">Tick devices, then add them to the group.</p>
+        <div class="scrollbox" id="foundList"></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="addAllBtn">Add all</button>
+          <button class="btn" id="addCheckedBtn">Add checked</button>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h2>Group</h2><p class="hint">The strip set every command drives.</p>
+          <div class="row">
+            <select id="groupSel" style="min-width:140px"></select>
+            <button class="btn small" id="grpNew">New</button>
+            <button class="btn small ghost" id="grpRename">Rename</button>
+            <button class="btn small danger" id="grpDel">Delete</button>
+          </div>
+          <div class="scrollbox" id="memberList" style="margin-top:8px"></div>
+        </div>
+        <div class="card"><h2>PC Lighting</h2><p class="hint">Mirror color to Windows Dynamic Lighting.</p>
+          <div class="row"><span class="badge" id="dynBadge">no lamps</span>
+            <button class="btn small ghost" id="dynRefresh">Refresh</button>
+            <button class="btn small" id="dynAdd">Add PC to group</button>
+          </div>
+        </div>
+      </div>
+      <div class="card"><h2>Remembered</h2><p class="hint" id="rememberedTxt"></p>
+        <div class="row"><button class="btn small danger" id="forgetBtn">Forget remembered</button></div>
+      </div>
+      <div class="card"><h2>Log</h2><div id="logBox"></div></div>
+    </section>
+
+    <section class="page" id="pg-color">
+      <div class="hero"><h1>Colors</h1><p>Live color, brightness, and white channels.</p>
+        <div class="right"><label class="chk"><input type="checkbox" id="liveChk" checked> Live send</label></div></div>
+      <div class="card"><div class="row">
+        <div class="swatch-lg" id="cPrev"></div>
+        <div><div id="cHex" style="font:700 16px Consolas,monospace">#ffffff</div>
+        <div id="cRgb" style="color:var(--muted);font-size:11px">255, 255, 255</div></div>
+        <div class="hspace"></div>
+        <button class="btn primary" id="applyColorBtn">Send color</button>
+      </div></div>
+      <div class="grid2">
+        <div class="card"><h2>Hue · Saturation · Light</h2>
+          <div class="row"><label class="lbl">Hue</label><input type="range" id="hSl" min="0" max="360" step="1"><span class="val" id="hVal"></span></div>
+          <div class="row"><label class="lbl">Saturation</label><input type="range" id="sSl" min="0" max="100" step="1"><span class="val" id="sVal"></span></div>
+          <div class="row"><label class="lbl">Light</label><input type="range" id="lSl" min="0" max="100" step="1"><span class="val" id="lVal"></span></div>
+          <div class="row"><label class="lbl">Hex</label><input type="text" id="hexIn" style="width:110px" placeholder="#FF8040"><button class="btn small" id="hexApply">Apply</button></div>
+        </div>
+        <div class="card"><h2>Red · Green · Blue</h2>
+          <div class="row"><label class="lbl" style="color:var(--red)">Red</label><input type="range" id="rSl" min="0" max="255" step="1"><span class="val" id="rVal"></span></div>
+          <div class="row"><label class="lbl" style="color:var(--green)">Green</label><input type="range" id="gSl" min="0" max="255" step="1"><span class="val" id="gVal"></span></div>
+          <div class="row"><label class="lbl" style="color:var(--accent-hover)">Blue</label><input type="range" id="bSl" min="0" max="255" step="1"><span class="val" id="bVal"></span></div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h2>Brightness</h2>
+          <div class="row"><input type="range" id="briSl" min="0" max="100" step="1"><span class="val" id="briVal"></span>
+            <select id="chanSel"><option>ALL</option><option>RGB</option><option>W</option><option>CT</option></select></div>
+          <div class="row"><button class="btn small" id="briSend">Send brightness</button></div>
+        </div>
+        <div class="card"><h2>White channels</h2><p class="hint">Warm / cold white and RGBW state.</p>
+          <div class="row"><label class="lbl">W</label><input type="range" id="wSl" min="0" max="255" step="1"><span class="val" id="wVal"></span><button class="btn small" id="wSend">Send</button></div>
+          <div class="row"><label class="lbl">Warm</label><input type="range" id="warmSl" min="0" max="255" step="1"><span class="val" id="warmVal"></span></div>
+          <div class="row"><label class="lbl">Cold</label><input type="range" id="coldSl" min="0" max="255" step="1"><span class="val" id="coldVal"></span><button class="btn small" id="cctSend">Send CCT</button></div>
+        </div>
+      </div>
+      <div class="card"><h2>Channels &amp; pins</h2><p class="hint">Toggle LED channels and set pin order.</p>
+        <div class="row"><label class="chk"><input type="checkbox" id="chRgb" checked> RGB</label>
+          <label class="chk"><input type="checkbox" id="chW" checked> W</label>
+          <label class="chk"><input type="checkbox" id="chCct" checked> CCT</label>
+          <button class="btn small" id="rgbwSend">Send</button></div>
+        <div class="row"><label class="lbl">Pins 1-6</label>
+          <input type="number" id="pin1" min="1" max="6" value="1" style="width:52px">
+          <input type="number" id="pin2" min="1" max="6" value="2" style="width:52px">
+          <input type="number" id="pin3" min="1" max="6" value="3" style="width:52px">
+          <button class="btn small" id="pinsSend">Send pins</button></div>
+      </div>
+      <div class="card"><h2>Presets</h2><div class="swatches" id="presetRow"></div>
+        <h2 style="margin-top:12px">Recent</h2><div class="swatches" id="recentRow"></div></div>
+    </section>
+
+    <section class="page" id="pg-tune">
+      <div class="hero"><h1>Tune</h1><p>White-balance helper, gains, per-color output, profiles. Edits stage until Save.</p></div>
+      <div class="card"><h2>White balance helper</h2><p class="hint">1 Show white · 2 tap the tint you see too much of · 3 repeat · 4 press Save.</p>
+        <div class="row"><button class="btn green small" id="wbShow">Show white</button>
+          <button class="btn small" data-wb="blue">Too blue</button>
+          <button class="btn small" data-wb="red">Too red</button>
+          <button class="btn small" data-wb="green">Too green</button>
+          <button class="btn small" data-wb="dim">Too dim</button></div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h2>Channel gains</h2>
+          <div class="row"><label class="lbl" style="color:var(--red)">R gain</label><input type="range" id="grSl" min="20" max="200"><span class="val" id="grVal"></span></div>
+          <div class="row"><label class="lbl" style="color:var(--green)">G gain</label><input type="range" id="ggSl" min="20" max="200"><span class="val" id="ggVal"></span></div>
+          <div class="row"><label class="lbl" style="color:var(--accent-hover)">B gain</label><input type="range" id="gbSl" min="20" max="200"><span class="val" id="gbVal"></span></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="calEn"> Calibration enabled</label></div>
+        </div>
+        <div class="card"><h2>Response</h2>
+          <div class="row"><label class="lbl">Gamma</label><input type="range" id="gamSl" min="0.3" max="3" step="0.01"><span class="val" id="gamVal"></span></div>
+          <div class="row"><label class="lbl">Warm↔Cool</label><input type="range" id="tmpSl" min="-100" max="100" step="1"><span class="val" id="tmpVal"></span></div>
+          <div class="row"><label class="lbl">Saturation</label><input type="range" id="satSl" min="0" max="200"><span class="val" id="satVal"></span></div>
+          <div class="row"><label class="lbl">Ceiling</label><input type="range" id="limSl" min="10" max="100"><span class="val" id="limVal"></span></div>
+          <div class="row"><label class="lbl">Order</label><select id="ordSel"><option>RGB</option><option>RBG</option><option>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option></select>
+            <label class="chk"><input type="checkbox" id="liveWhite"> Show white live</label></div>
+        </div>
+      </div>
+      <div class="card"><h2>Per-color output</h2><p class="hint">What the strip receives for pure requests. Show tests on the strip.</p><div id="primRows"></div></div>
+      <div class="card"><h2>Preview <span style="color:var(--muted);font-weight:400">(requested → sent)</span></h2>
+        <div class="row"><div class="swatch-lg" id="tuneReq" style="width:80px;height:44px"></div><b>→</b><div class="swatch-lg" id="tuneOut" style="width:80px;height:44px"></div><span class="val" id="tuneTxt"></span></div>
+        <div class="swatches" id="tuneTests" style="margin-top:8px"></div>
+      </div>
+      <div class="card"><h2>Tune profiles</h2>
+        <div class="row"><select id="tuneProfSel" style="min-width:150px"></select>
+          <button class="btn small" id="tpApply">Apply</button><button class="btn small" id="tpSave">Save</button>
+          <button class="btn small ghost" id="tpRename">Rename</button><button class="btn small danger" id="tpDel">Delete</button></div>
+      </div>
+    </section>
+
+    <section class="page" id="pg-modes">
+      <div class="hero"><h1>Modes</h1><p>29 strip effects with speed and brightness.</p></div>
+      <div class="grid2">
+        <div class="card"><h2>Effects</h2><div class="modes" id="modeGrid"></div></div>
+        <div class="card"><h2>Motion</h2>
+          <div class="row"><label class="lbl">Speed</label><input type="range" id="spdSl" min="0" max="100"><span class="val" id="spdVal"></span><button class="btn small" id="spdSend">Send</button></div>
+          <div class="row"><label class="lbl">Brightness</label><input type="range" id="mbSl" min="0" max="100"><span class="val" id="mbVal"></span><button class="btn small" id="mbSend">Send</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="pg-timing">
+      <div class="hero"><h1>Timing</h1><p>Timers and schedules that run on the strip.</p>
+        <div class="right"><button class="btn small" id="syncTimeBtn">Sync PC time</button></div></div>
+      <div id="timerCards"></div>
+      <div class="card"><h2>Schedules</h2><p class="hint">Fire actions on the PC side at set times.</p>
+        <div id="schedList"></div>
+        <div class="row" style="margin-top:8px"><button class="btn small" id="schedAdd">Add schedule</button></div>
+      </div>
+    </section>
+
+    <section class="page" id="pg-ambi">
+      <div class="hero"><h1>Ambilight</h1><p>Screen-sync lighting with crossfade, presets, and eco mode.</p>
+        <div class="right"><button class="btn green" id="ambiBtn">Start Ambilight</button>
+        <label class="chk"><input type="checkbox" id="ambiAuto"> Start at app startup</label></div></div>
+      <div class="card"><div class="row">
+        <div class="swatch-lg" id="ambiPrev" style="width:90px"></div>
+        <span class="val" id="ambiStat">idle</span>
+        <div class="hspace"></div><div class="tiles" id="candTiles" style="min-width:280px"></div>
+      </div></div>
+      <div class="grid2">
+        <div class="card"><h2>Capture</h2>
+          <div class="row"><label class="lbl">Area</label><select id="ambiMode"><option value="center">Center 50% (fast)</option><option value="full">Full screen (slow)</option></select>
+            <label class="lbl">Monitor</label><select id="ambiMon"></select></div>
+          <div class="row"><label class="lbl">Sampling</label><select id="ambiSample"><option>Average</option><option>Dominant</option><option>Vibrant</option><option>Brightest</option></select></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="ambiXf" checked> Crossfade</label>
+            <label class="chk"><input type="checkbox" id="ambiDx" checked> GPU capture (dxcam)</label></div>
+        </div>
+        <div class="card"><h2>Presets</h2><div class="swatches" id="ambiPresetRow"></div>
+          <div class="row" style="margin-top:8px"><select id="ambiCustomSel" style="min-width:140px"></select>
+            <button class="btn small" id="acApply">Apply</button><button class="btn small" id="acSave">Save</button>
+            <button class="btn small ghost" id="acRename">Rename</button><button class="btn small danger" id="acDel">Delete</button></div>
+        </div>
+      </div>
+      <div class="card"><h2>Engine</h2>
+        <div class="row"><label class="lbl">Fade FPS</label><input type="range" id="aFps" min="1" max="60"><span class="val" id="aFpsV"></span></div>
+        <div class="row"><label class="lbl">Crossfade (s)</label><input type="range" id="aSm" min="0" max="10" step="0.1"><span class="val" id="aSmV"></span></div>
+        <div class="row"><label class="lbl">Brightness</label><input type="range" id="aBri" min="1" max="100"><span class="val" id="aBriV"></span></div>
+        <div class="row"><label class="lbl">Min Delta</label><input type="range" id="aMd" min="0" max="30"><span class="val" id="aMdV"></span></div>
+        <div class="row"><label class="lbl">Dull→white</label><input type="range" id="aWf" min="0" max="100"><span class="val" id="aWfV"></span></div>
+        <div class="row"><label class="lbl">Update (s)</label><input type="range" id="aIv" min="0.02" max="2" step="0.01"><span class="val" id="aIvV"></span></div>
+      </div>
+    </section>
+
+    <section class="page" id="pg-settings">
+      <div class="hero"><h1>Setup</h1><p>Startup, Bluetooth, Dynamic Lighting, appearance.</p></div>
+      <div class="grid2">
+        <div class="card"><h2>Windows startup</h2>
+          <div class="row"><label class="chk"><input type="checkbox" id="stStartup"> Start app with Windows</label></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="stTask"> High priority startup (task only)</label></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="stMinimized"> Start minimized to tray</label></div>
+        </div>
+        <div class="card"><h2>Bluetooth</h2>
+          <div class="row"><b id="btState">checking …</b><button class="btn small ghost" id="btRefresh">Refresh</button>
+            <button class="btn small" id="btOn">Turn on now</button><button class="btn small ghost" id="btSettings">BT Settings</button></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="stBtAuto"> Try to enable Bluetooth at startup</label></div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h2>Windows Dynamic Lighting</h2><p class="hint">Experimental mirror to PC lamps.</p>
+          <div class="row"><label class="chk"><input type="checkbox" id="stDyn"> Enable Dynamic Lighting mirror</label>
+            <button class="btn small ghost" id="dynRefresh2">Refresh</button></div>
+          <div class="row"><span class="val" id="dynStatus">off</span></div>
+        </div>
+        <div class="card"><h2>Connection</h2>
+          <div class="row"><label class="chk"><input type="checkbox" id="stAutoConn"> Auto-connect remembered</label></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="stAutoRe"> Auto-reconnect on drop</label></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="stSyncTime"> Sync PC clock after connect</label></div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h2>Window</h2>
+          <div class="row"><label class="chk"><input type="checkbox" id="stQuit"> Close button quits instead of tray</label></div>
+        </div>
+        <div class="card"><h2>Appearance</h2>
+          <div class="row"><label class="chk"><input type="checkbox" id="stMotion"> Reduce animations</label></div>
+        </div>
+      </div>
+      <div class="card"><h2>Config file</h2><p class="hint" id="cfgPath"></p>
+        <div class="row"><button class="btn small ghost" id="cfgOpen">Open folder</button>
+          <button class="btn small" id="cfgSave">Save now</button></div>
+      </div>
+    </section>
+  </main>
+  <div class="hairline"></div>
+  <footer>
+    <span id="ftBt">BT: …</span><span id="ftAmbi">Ambi: idle</span>
+    <span class="msg" id="ftMsg">Ready</span><span id="ftVer">v1.1.0</span>
+  </footer>
+</div>
+<div id="modalWrap"><div id="modal">
+  <h3 id="mTitle"></h3><p id="mText"></p><input type="text" id="mInput" style="display:none">
+  <div class="mrow-btns" id="mBtns"></div>
+</div></div>
+<script src="app.js"></script>
+</body>
+</html>

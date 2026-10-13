@@ -1,6 +1,6 @@
 # Elf-Ambilight
 
-Modern Windows control for BLE LED strips — colors, effects, schedules, and real-time screen-sync ambient lighting. Python + customtkinter, single EXE, no install needed.
+Modern Windows control for BLE LED strips — colors, effects, schedules, and real-time screen-sync ambient lighting. Embedded browser UI (WebView2, no external browser), single EXE, no install needed.
 
 **Download:** [Latest release](https://github.com/Deepma1ya/Elf-Ambilight/releases/latest) — grab `Elf-Ambilight.exe` and double-click.
 
@@ -31,7 +31,7 @@ Requires Python 3.12+ on Windows 10/11 with Bluetooth LE.
 
 ```bat
 pip install -r requirements.txt
-python app.py
+python webapp.py
 ```
 
 To build the EXE (same command the release uses):
@@ -46,7 +46,9 @@ Output: `dist\Elf-Ambilight.exe`.
 
 | File | Purpose |
 |---|---|
-| `app.py` | customtkinter UI — sidebar pages, tray, schedules, all user interaction |
+| `webapp.py` | WebUI backend — pywebview window, JS bridge, tray, schedules, all logic |
+| `webui/` | Embedded frontend — `index.html` + `styles.css` + `app.js` (Neon OLED theme) |
+| `app.py` | legacy customtkinter UI (kept as fallback; the release EXE uses the WebUI) |
 | `ambilight.py` | Screen capture (dxcam/mss), sampling, time-based crossfade engine |
 | `protocol.py` | BLE protocol — 9-byte `7E…EF` packets, 29 modes, ELK auto-encrypt |
 | `ble_manager.py` | Bleak connection manager (scan, connect, throttled writes) |

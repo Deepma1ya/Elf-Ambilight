@@ -64,6 +64,26 @@ def is_elevated() -> bool:
     return _is_elevated()
 
 
+def enable_high_priority(on: bool, minimized: bool = False):
+    """Single-launcher model: the task and the registry Run entry are
+    mutually exclusive — only one may launch the app at logon, otherwise
+    Windows starts it twice."""
+    if on:
+        set_startup(False)  # task becomes the ONLY launcher
+        set_task(True, minimized=minimized)
+    else:
+        set_task(False)
+        set_startup(True, minimized=minimized)  # restore normal launcher
+
+
+def disable_all_startup():
+    for fn in (lambda: set_task(False), lambda: set_startup(False)):
+        try:
+            fn()
+        except Exception:
+            pass
+
+
 def relaunch_elevated_task(enable: bool):
     """Relaunch self via UAC prompt to flip the task. The elevated copy
     handles --task on|off and exits without GUI. Raises if the user
