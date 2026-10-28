@@ -968,6 +968,9 @@ class Api:
                 c.cal_gain_g = max(0.2, min(2.0, float(payload.get("g", c.cal_gain_g))))
                 c.cal_gain_b = max(0.2, min(2.0, float(payload.get("b", c.cal_gain_b))))
                 c.cal_gamma = max(0.3, min(3.0, float(payload.get("gamma", c.cal_gamma))))
+                c.cal_gamma_r = max(0.3, min(3.0, float(payload.get("gamma_r", c.cal_gamma_r))))
+                c.cal_gamma_g = max(0.3, min(3.0, float(payload.get("gamma_g", c.cal_gamma_g))))
+                c.cal_gamma_b = max(0.3, min(3.0, float(payload.get("gamma_b", c.cal_gamma_b))))
                 c.cal_temp = max(-100, min(100, int(payload.get("temp", c.cal_temp))))
                 c.cal_order = str(payload.get("order", c.cal_order))
                 c.cal_sat = max(0.0, min(2.0, float(payload.get("sat", c.cal_sat))))
@@ -990,6 +993,7 @@ class Api:
         c.cal_enabled = True
         c.cal_gain_r = c.cal_gain_g = c.cal_gain_b = 1.0
         c.cal_gamma = 1.0
+        c.cal_gamma_r = c.cal_gamma_g = c.cal_gamma_b = 1.0
         c.cal_temp = 0
         c.cal_order = "RGB"
         c.cal_sat = 1.0
@@ -1008,6 +1012,48 @@ class Api:
     def wb_show(self):
         _B()._send_pkt(pkt_color_static(255, 255, 255), "white balance ref")
         return True
+
+    def favorite_add(self, r, g, b):
+        c = _B().cfg
+        col = [max(0, min(255, int(r))), max(0, min(255, int(g))), max(0, min(255, int(b)))]
+        favs = [f for f in (c.favorites or []) if f != col]
+        favs.insert(0, col)
+        c.favorites = favs[:12]
+        _B()._save_keys({"favorites": c.favorites})
+        _B().log(f"Colour saved to favourites: {tuple(col)}")
+        return _B().get_state()
+
+    def favorite_remove(self, r, g, b):
+        c = _B().cfg
+        col = [int(r), int(g), int(b)]
+        c.favorites = [f for f in (c.favorites or []) if f != col]
+        _B()._save_keys({"favorites": c.favorites})
+        return _B().get_state()
+
+    def capture_screen_color(self):
+        """One-shot screen colour sample (centre 50%) for the match-screen tool."""
+        b = _B()
+        try:
+            if b.ambilight.running:
+                return {"rgb": list(b.ambilight.last_color), "live": True}
+        except Exception:
+            pass
+        try:
+            import mss
+            from PIL import Image, ImageStat
+            with mss.mss() as sct:
+                mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                w, h = mon["width"], mon["height"]
+                box = {"left": mon["left"] + w // 4, "top": mon["top"] + h // 4,
+                       "width": max(1, w // 2), "height": max(1, h // 2)}
+                shot = sct.grab(box)
+                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                img = img.resize((57, 32))
+                m = ImageStat.Stat(img).mean
+                return {"rgb": [int(m[0]), int(m[1]), int(m[2])], "live": False}
+        except Exception as e:
+            b.log(f"Screen match failed: {e}")
+            return {"rgb": None, "live": False}
 
     def wb_nudge(self, kind):
         c = _B().cfg
@@ -1029,6 +1075,8 @@ class Api:
         c = _B().cfg
         return {"gain_r": float(c.cal_gain_r), "gain_g": float(c.cal_gain_g),
                 "gain_b": float(c.cal_gain_b), "gamma": float(c.cal_gamma),
+                "gamma_r": float(c.cal_gamma_r), "gamma_g": float(c.cal_gamma_g),
+                "gamma_b": float(c.cal_gamma_b),
                 "temp": int(c.cal_temp), "order": str(c.cal_order),
                 "sat": float(c.cal_sat), "limit": float(c.cal_limit),
                 "prim_r": list(c.prim_r), "prim_g": list(c.prim_g),
@@ -1042,6 +1090,9 @@ class Api:
         c.cal_enabled = p["enabled"]
         c.cal_gain_r, c.cal_gain_g, c.cal_gain_b = p["gain_r"], p["gain_g"], p["gain_b"]
         c.cal_gamma, c.cal_temp, c.cal_order = p["gamma"], p["temp"], p["order"]
+        c.cal_gamma_r = p.get("gamma_r", 1.0)
+        c.cal_gamma_g = p.get("gamma_g", 1.0)
+        c.cal_gamma_b = p.get("gamma_b", 1.0)
         c.cal_sat, c.cal_limit = p["sat"], p["limit"]
         c.prim_r, c.prim_g, c.prim_b = list(p["prim_r"]), list(p["prim_g"]), list(p["prim_b"])
         c.white_pt = list(p["white_pt"])

@@ -61,6 +61,9 @@ class Config:
     cal_gain_g: float = 1.0
     cal_gain_b: float = 1.0
     cal_gamma: float = 1.0
+    cal_gamma_r: float = 1.0  # per-channel gamma (1 = linear)
+    cal_gamma_g: float = 1.0
+    cal_gamma_b: float = 1.0
     cal_temp: int = 0
     cal_order: str = "RGB"
     cal_sat: float = 1.0  # 0..2 saturation boost (1 = neutral)
@@ -84,6 +87,7 @@ class Config:
     last_speed: int = 50
     last_sent: str = "color"  # what the strip shows: "color" | "mode"
     recent_colors: list[list[int]] = field(default_factory=list)
+    favorites: list[list[int]] = field(default_factory=list)  # saved swatches (max 12)
 
     # UI prefs
     quit_on_close: bool = False  # False = close minimizes to tray
@@ -195,6 +199,19 @@ class Config:
             r1 = 255.0 * ((max(0, r1) / 255.0) ** gm)
             g1 = 255.0 * ((max(0, g1) / 255.0) ** gm)
             b1 = 255.0 * ((max(0, b1) / 255.0) ** gm)
+        # per-channel gamma shapes each primary independently
+        for attr, comp in (("cal_gamma_r", 0), ("cal_gamma_g", 1), ("cal_gamma_b", 2)):
+            try:
+                gch = max(0.3, min(3.0, float(getattr(self, attr, 1.0))))
+            except Exception:
+                gch = 1.0
+            if abs(gch - 1.0) > 1e-6:
+                if comp == 0:
+                    r1 = 255.0 * ((max(0, r1) / 255.0) ** gch)
+                elif comp == 1:
+                    g1 = 255.0 * ((max(0, g1) / 255.0) ** gch)
+                else:
+                    b1 = 255.0 * ((max(0, b1) / 255.0) ** gch)
         st = max(0.0, min(2.0, self.cal_sat))
         if abs(st - 1.0) > 1e-6:
             lum = (r1 + g1 + b1) / 3.0
@@ -271,6 +288,9 @@ class Config:
             "gain_g": _f("gain_g", 0.2, 2.0, 1.0),
             "gain_b": _f("gain_b", 0.2, 2.0, 1.0),
             "gamma": _f("gamma", 0.3, 3.0, 1.0),
+            "gamma_r": _f("gamma_r", 0.3, 3.0, 1.0),
+            "gamma_g": _f("gamma_g", 0.3, 3.0, 1.0),
+            "gamma_b": _f("gamma_b", 0.3, 3.0, 1.0),
             "temp": max(-100, min(100, int(_f("temp", -100, 100, 0)))),
             "order": order,
             "sat": _f("sat", 0.0, 2.0, 1.0),
@@ -384,6 +404,23 @@ class Config:
                     c.ambi_monitor = 1
                 if getattr(c, "ui_theme", "light") not in ("light", "dark"):
                     c.ui_theme = "light"
+                for attr in ("cal_gamma_r", "cal_gamma_g", "cal_gamma_b"):
+                    try:
+                        setattr(c, attr, max(0.3, min(3.0, float(getattr(c, attr, 1.0)))))
+                    except Exception:
+                        setattr(c, attr, 1.0)
+                try:
+                    favs = []
+                    for v in (c.favorites or []):
+                        try:
+                            t = [max(0, min(255, int(x))) for x in list(v)[:3]]
+                            if len(t) == 3:
+                                favs.append(t)
+                        except Exception:
+                            continue
+                    c.favorites = favs[:12]
+                except Exception:
+                    c.favorites = []
                 try:
                     raw = c.ambi_custom_presets or {}
                     c.ambi_custom_presets = {

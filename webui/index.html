@@ -276,6 +276,16 @@
               <div class="hr" style="height:1px;background:var(--line);margin:14px 0 10px"></div>
               <div class="overline" style="margin-bottom:7px">Harmony</div>
               <div class="harmony" id="harmonyRow"></div>
+              <div class="hr" style="height:1px;background:var(--line);margin:14px 0 10px"></div>
+              <div class="field" style="gap:6px;flex-wrap:wrap">
+                <button class="btn sm" id="matchScreen" title="Sample the centre of the screen once">
+                  <svg><use href="#i-eyedrop"/></svg>Match screen
+                </button>
+                <button class="btn sm" id="saveFav" title="Save this colour to favourites">
+                  <svg><use href="#i-plus"/></svg>Save colour
+                </button>
+                <button class="btn sm ghost" id="randomColor">Random</button>
+              </div>
             </div>
           </div>
 
@@ -352,12 +362,14 @@
                     <div class="tabs" data-tabs="color-library">
                       <button class="tab on" data-tab="presets">Presets</button>
                       <button class="tab" data-tab="recent">Recent</button>
+                      <button class="tab" data-tab="favorites">Saved</button>
                     </div>
                   </div>
                 </div>
                 <div class="card-body">
                   <div class="tabpanel on" data-panel="color-library:presets"><div class="swatches" id="presetRow"></div></div>
                   <div class="tabpanel" data-panel="color-library:recent"><div class="swatches" id="recentRow"></div></div>
+                  <div class="tabpanel" data-panel="color-library:favorites"><div class="swatches" id="favRow"></div></div>
                 </div>
               </div>
 
@@ -442,6 +454,14 @@
               <div class="card-body">
                 <div class="field"><span class="field-label">Gamma</span><input type="range" id="gamSl" min="0.3" max="3" step="0.01"><span class="field-val" id="gamVal">1.00</span></div>
                 <div class="field"><span class="field-label">Warm / cool</span><input type="range" id="tmpSl" min="-100" max="100"><span class="field-val" id="tmpVal">0</span></div>
+                <div class="field"><span class="field-label">Presets</span>
+                  <div class="chips" id="wbTempChips">
+                    <button class="chip" data-wbtemp="-55">Cool</button>
+                    <button class="chip" data-wbtemp="0">Neutral</button>
+                    <button class="chip" data-wbtemp="20">Daylight</button>
+                    <button class="chip" data-wbtemp="60">Warm</button>
+                  </div>
+                </div>
                 <div class="field"><span class="field-label">Saturation</span><input type="range" id="satSl" min="0" max="200"><span class="field-val" id="satVal">100%</span></div>
                 <div class="field"><span class="field-label">Ceiling</span><input type="range" id="limSl" min="10" max="100"><span class="field-val" id="limVal">100%</span></div>
                 <div class="field"><span class="field-label">Channel order</span>
@@ -449,6 +469,11 @@
                   <div style="flex:1"></div>
                   <label class="check"><input type="checkbox" id="liveWhite">Preview on white</label>
                 </div>
+                <div class="hr" style="height:1px;background:var(--line);margin:12px 0 8px"></div>
+                <div class="overline" style="margin-bottom:6px">Per-channel gamma</div>
+                <div class="field"><span class="field-label" style="color:var(--danger)">Red γ</span><input type="range" id="ggrSl" min="0.3" max="3" step="0.01"><span class="field-val" id="ggrVal">1.00</span></div>
+                <div class="field"><span class="field-label" style="color:var(--ok)">Green γ</span><input type="range" id="gggSl" min="0.3" max="3" step="0.01"><span class="field-val" id="gggVal">1.00</span></div>
+                <div class="field"><span class="field-label" style="color:var(--brand)">Blue γ</span><input type="range" id="ggbSl" min="0.3" max="3" step="0.01"><span class="field-val" id="ggbVal">1.00</span></div>
               </div>
             </div>
           </div>

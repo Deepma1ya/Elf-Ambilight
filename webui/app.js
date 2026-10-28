@@ -504,6 +504,30 @@ function renderColor() {
     b2.onclick = () => { setColor(r, g, b); mut(api("set_color", r, g, b)); };
     rc.appendChild(b2);
   });
+  renderFavorites();
+}
+function renderFavorites() {
+  const row = $("favRow");
+  if (!row) return;
+  row.innerHTML = "";
+  const favs = S.cfg.favorites || [];
+  if (!favs.length) {
+    row.innerHTML = `<span class="list-s" style="font-family:var(--sans)">No saved colours yet — press “Save colour”.</span>`;
+    return;
+  }
+  favs.forEach(([r, g, b]) => {
+    const b2 = document.createElement("button");
+    b2.className = "sw"; b2.style.background = hx(r, g, b);
+    b2.title = `${hx(r, g, b)} — click to apply · shift-click to remove`;
+    b2.onclick = (e) => {
+      if (e.shiftKey) {
+        mut(api("favorite_remove", r, g, b)).then(() => { renderFavorites(); toast("Removed from favourites"); });
+      } else {
+        setColor(r, g, b); mut(api("set_color", r, g, b));
+      }
+    };
+    row.appendChild(b2);
+  });
 }
 
 /* ─────────────────────────── tune ─────────────────────────── */
@@ -516,6 +540,9 @@ function renderTune() {
   $("ggSl").value = t.cal_gain_g * 100;
   $("gbSl").value = t.cal_gain_b * 100;
   $("gamSl").value = t.cal_gamma;
+  $("ggrSl").value = t.cal_gamma_r;
+  $("gggSl").value = t.cal_gamma_g;
+  $("ggbSl").value = t.cal_gamma_b;
   $("tmpSl").value = t.cal_temp;
   $("satSl").value = t.cal_sat * 100;
   $("limSl").value = t.cal_limit * 100;
@@ -570,6 +597,9 @@ function tuneLabels() {
   $("ggVal").textContent = Math.round($("ggSl").value) + "%";
   $("gbVal").textContent = Math.round($("gbSl").value) + "%";
   $("gamVal").textContent = (+$("gamSl").value).toFixed(2);
+  $("ggrVal").textContent = (+$("ggrSl").value).toFixed(2);
+  $("gggVal").textContent = (+$("gggSl").value).toFixed(2);
+  $("ggbVal").textContent = (+$("ggbSl").value).toFixed(2);
   $("tmpVal").textContent = $("tmpSl").value;
   $("satVal").textContent = Math.round($("satSl").value) + "%";
   $("limVal").textContent = Math.round($("limSl").value) + "%";
@@ -589,6 +619,7 @@ const tuneChanged = debounce(() => {
   mut(api("tune_set", "gains", {
     r: +$("grSl").value / 100, g: +$("ggSl").value / 100, b: +$("gbSl").value / 100,
     gamma: +$("gamSl").value, temp: +$("tmpSl").value, order: $("ordSel").value,
+    gamma_r: +$("ggrSl").value, gamma_g: +$("gggSl").value, gamma_b: +$("ggbSl").value,
     sat: +$("satSl").value / 100, limit: +$("limSl").value / 100,
     enabled: $("calEn").getAttribute("aria-checked") === "true"
   }));
@@ -1066,6 +1097,24 @@ function bind() {
     catch (e) { $("hexIn").select(); document.execCommand && document.execCommand("copy"); toast("Hex copied"); }
   };
   $("eyeBtn").onclick = pickFromScreen;
+  $("matchScreen").onclick = async () => {
+    const res = await api("capture_screen_color");
+    if (!res || !res.rgb) { toast("Could not read the screen", "err"); return; }
+    const [r, g, b] = res.rgb;
+    setColor(r, g, b);
+    await api("set_color", r, g, b);
+    toast(res.live ? "Matched live Ambilight colour" : "Matched screen colour");
+  };
+  $("saveFav").onclick = () => mut(api("favorite_add", color.r, color.g, color.b)).then(() => toast("Colour saved"));
+  $("randomColor").onclick = () => {
+    const hue = Math.random() * 360;
+    const sat = 65 + Math.random() * 35;
+    const light = 42 + Math.random() * 22;
+    const [r, g, b] = hsl2rgb(hue, sat, light);
+    setColor(r, g, b);
+    mut(api("set_color", r, g, b));
+    toast("Random colour applied");
+  };
   $("applyColorBtn").onclick = () => mut(api("set_color", color.r, color.g, color.b)).then(() => toast("Colour sent"));
   $("briSl").oninput = () => { $("briVal").textContent = $("briSl").value; paintRange($("briSl")); };
   $("briSl").onchange = () => mut(api("set_brightness", +$("briSl").value, chan));
@@ -1088,9 +1137,16 @@ function bind() {
   };
   $("wbShow").onclick = () => api("wb_show");
   document.querySelectorAll("[data-wb]").forEach(b => b.onclick = () => mut(api("wb_nudge", b.dataset.wb)));
-  ["grSl", "ggSl", "gbSl", "gamSl", "tmpSl", "satSl", "limSl"].forEach(id => $(id).oninput = () => { tuneLabels(); paintRange($(id)); tuneChanged(); });
+  ["grSl", "ggSl", "gbSl", "gamSl", "tmpSl", "satSl", "limSl", "ggrSl", "gggSl", "ggbSl"].forEach(id => $(id).oninput = () => { tuneLabels(); paintRange($(id)); tuneChanged(); });
   $("ordSel").onchange = tuneChanged;
   bindSwitch($("calEn"), () => tuneChanged());
+  document.querySelectorAll("[data-wbtemp]").forEach(b => b.onclick = () => {
+    $("tmpSl").value = b.dataset.wbtemp;
+    paintRange($("tmpSl"));
+    tuneLabels();
+    tuneChanged();
+    toast(`White balance: ${b.textContent}`);
+  });
   $("tpApply").onclick = () => {
     const n = $("tuneProfSel").value;
     if (!n) return toast("No profile selected", "err");
