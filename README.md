@@ -4,13 +4,15 @@ Modern Windows control for BLE LED strips — colors, effects, schedules, and re
 
 **Download:** [Latest release](https://github.com/Deepma1ya/Elf-Ambilight/releases/latest) — grab `Elf-Ambilight.exe` and double-click.
 
+**Changelog:** [CHANGELOG.md](CHANGELOG.md) — what changed in every release.
+
 ## Features
 
 - **Devices** — BLE scan/connect, named groups, auto-connect and auto-reconnect on startup.
 - **Colors** — interactive HSV wheel, eyedropper, harmony swatches, hex/RGB/HSL, 24 presets, scenes, live-send while dragging.
 - **Calibration** — guided white-balance helper, per-channel gains, gamma, temperature, saturation/ceiling, channel order, per-primary matrix calibration with live preview, and named profiles.
 - **Effects** — 29 built-in strip effects with searchable categories, brightness and speed control.
-- **Command palette** — `Ctrl+K` to jump to any page, run actions, or apply presets; `Ctrl+S` saves, `Alt+1–7` switches pages.
+- **Command palette** — `Ctrl+K` to jump to any page, run actions, or apply presets; `Ctrl+S` saves, `Alt+1–8` switches pages.
 - **Schedule** — on-board strip timers plus PC-side schedules (power, color, mode).
 - **Ambilight** — screen-sync lighting with center/full capture, average/dominant/vibrant/brightest sampling, exact-duration crossfade (0–10 s), built-in and custom presets, idle eco mode, and **per-app launch rules** (start when VLC/Media Player/any app runs, optionally stop when it closes). The window hides while syncing so the strip never mirrors its own UI (toggle in Capture). Capture runs at 5 Hz in a background thread with a capture-free fade loop, so Windows stays smooth while it runs.
 - **Studio** — stream a video, animated GIF/WebP/APNG, or a generated animation (rainbow, pulse, chase, fire, ocean) to the strip continuously, with FPS, brightness and loop controls. Video decoding uses the system **ffmpeg**; GIF/WebP work without it.
@@ -49,16 +51,19 @@ Output: `dist\Elf-Ambilight.exe`.
 | File | Purpose |
 |---|---|
 | `webapp.py` | WebUI backend — pywebview window, JS bridge, tray, schedules, all logic |
-| `webui/` | Embedded frontend — `index.html` + `styles.css` + `app.js` (Neon OLED theme) |
+| `webui/` | Embedded frontend — `index.html` + `styles.css` + `app.js` (light/dark, animated) |
 | `app.py` | legacy customtkinter UI (kept as fallback; the release EXE uses the WebUI) |
 | `ambilight.py` | Screen capture (dxcam/mss), sampling, time-based crossfade engine |
+| `media_player.py` | Studio playback — FFmpeg video, GIF/WebP/APNG, generated animations |
+| `app_rules.py` | Native process/window scan for per-app Ambilight rules |
 | `protocol.py` | BLE protocol — 9-byte `7E…EF` packets, 29 modes, ELK auto-encrypt |
 | `ble_manager.py` | Bleak connection manager (scan, connect, throttled writes) |
 | `config.py` | Settings in `%appdata%\Elf-Ambilight\config.json` (migrates legacy copies) |
 | `bt_helper.py` | Bluetooth service check / enable helpers |
-| `startup_helper.py` | `HKCU\...\Run` autostart entry |
+| `startup_helper.py` | Run-key autostart + elevated ONLOGON task (high priority) |
 | `single_instance.py` | Named-mutex singleton guard |
-| `icon.ico` | App icon (window, tray, taskbar, EXE) |
+| `proc.py` | Hidden subprocess helper (no console windows) |
+| `icon.ico` | App icon (window, tray, taskbar, EXE), rounded corners, multi-size |
 
 ## Protocol notes
 

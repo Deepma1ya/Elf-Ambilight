@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "Elf-Ambilight"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 from protocol import (
     MODES, pkt_power, pkt_brightness, pkt_color_static, pkt_mode,
