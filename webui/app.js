@@ -408,8 +408,12 @@ function setColor(r, g, b, src) {
   renderHarmony(hh);
 }
 const liveSend = debounce(() => {
-  if ($("liveSw").getAttribute("aria-checked") === "true") api("set_color", color.r, color.g, color.b);
+  if ($("liveSw").getAttribute("aria-checked") === "true")
+    api("set_color", color.r, color.g, color.b, false);
 }, 140);
+const wheelSend = debounce(() => {
+  api("set_color", color.r, color.g, color.b, false);
+}, 60);
 
 /* ─────────────────────────── color wheel ─────────────────────────── */
 let wheelReady = false;
@@ -459,7 +463,7 @@ function wheelPick(ev) {
   const s = clamp((d / R) * 100, 0, 100);
   const l = +$("wheelL").value;
   setColor(...hsl2rgb(h, s, l), "wheel");
-  liveSend();
+  wheelSend();
 }
 function bindWheel() {
   const canvas = $("wheel");

@@ -723,18 +723,38 @@ class Api:
         return _B().get_state()
 
     def discard(self):
+        b = _B()
+        dirty = set(b._dirty)
         try:
-            _B()._dirty.clear()
-            _B().cfg = Config.load()
-            _B().ambilight.calibrate = _B().cfg.cal_apply
+            b._dirty.clear()
+            b.cfg = Config.load()
+            b.ambilight.calibrate = b.cfg.cal_apply
             try:
-                _B().ambilight.white_floor = float(_B().cfg.ambi_white_floor)
+                b.ambilight.white_floor = float(b.cfg.ambi_white_floor)
             except Exception:
                 pass
         except Exception as e:
-            _B().log(f"Revert failed: {e}")
-        _B().log("Discarded — reverted to last save.")
-        return _B().get_state()
+            b.log(f"Revert failed: {e}")
+        # Put the saved light state back on the strip — reloading the UI alone
+        # would leave the hardware showing the discarded colour.
+        if dirty & {"color", "tune", "modes"}:
+            try:
+                c = b.cfg
+                b._send_pkt(pkt_brightness(c.last_brightness),
+                            f"revert brightness {c.last_brightness}")
+                if c.last_sent == "mode" or (
+                        "modes" in dirty and not (dirty & {"color", "tune"})):
+                    b._send_pkt(pkt_mode(c.last_mode),
+                                f"revert mode {c.last_mode} {MODES[c.last_mode]}")
+                    b._send_pkt(pkt_mode_speed(c.last_speed),
+                                f"revert speed {c.last_speed}")
+                else:
+                    b._send_pkt(pkt_color_static(c.last_r, c.last_g, c.last_b),
+                                f"revert RGB({c.last_r},{c.last_g},{c.last_b})")
+            except Exception as e:
+                b.log(f"Revert send failed: {e}")
+        b.log("Discarded — reverted to last save.")
+        return b.get_state()
 
     def quit(self):
         if _B()._dirty:
@@ -978,11 +998,12 @@ class Api:
         _B()._send_pkt(pkt_power(bool(on)), f"power {'ON' if on else 'OFF'}")
         return True
 
-    def set_color(self, r, g, b):
+    def set_color(self, r, g, b, record=True):
         c = _B().cfg
         c.last_r, c.last_g, c.last_b = int(r), int(g), int(b)
         c.last_sent = "color"
-        c.add_recent(int(r), int(g), int(b))
+        if record:
+            c.add_recent(int(r), int(g), int(b))
         _B()._mark_dirty("color")
         _B()._send_pkt(pkt_color_static(int(r), int(g), int(b)),
                          f"static RGB({int(r)},{int(g)},{int(b)})")
