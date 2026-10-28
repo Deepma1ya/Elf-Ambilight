@@ -16,7 +16,6 @@ let logs = [];
 let chan = "ALL";
 let ambiMode = "center";
 let color = { r: 255, g: 255, b: 255 };
-let theme = "light";
 let modeFilter = "";
 let modeCat = "All";
 
@@ -140,17 +139,33 @@ const askConfirm = (title, text) => new Promise(res => {
 });
 $("modalWrap").addEventListener("click", e => { if (e.target.id === "modalWrap") dismissModal(); });
 
-/* ─────────────────────────── theme ─────────────────────────── */
-function applyTheme(next, persist = true) {
-  theme = next === "dark" ? "dark" : "light";
-  document.documentElement.setAttribute("data-theme", theme);
-  const icon = $("themeIcon");
-  if (icon) icon.innerHTML = `<use href="#${theme === "dark" ? "i-sun" : "i-moon"}"/>`;
-  try { localStorage.setItem("elf.theme", theme); } catch (e) {}
-  if (persist) { try { api("set_theme", theme); } catch (e) {} }
-  if (S) renderThemeCards();
+/* ─────────────────────── theme: light / dark / system ─────────────────────── */
+const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+let themeMode = "light";
+const THEME_MODES = ["light", "dark", "system"];
+
+function resolvedTheme() {
+  if (themeMode === "system") return darkQuery && darkQuery.matches ? "dark" : "light";
+  return themeMode;
 }
-$("themeBtn").onclick = () => applyTheme(theme === "dark" ? "light" : "dark");
+function applyTheme(mode, persist = true) {
+  themeMode = THEME_MODES.includes(mode) ? mode : "light";
+  document.documentElement.setAttribute("data-theme", resolvedTheme());
+  document.documentElement.classList.add("theming");
+  clearTimeout(applyTheme._t);
+  applyTheme._t = setTimeout(() => document.documentElement.classList.remove("theming"), 300);
+  try { localStorage.setItem("elf.theme", themeMode); } catch (e) {}
+  if (persist) { try { api("set_theme", themeMode); } catch (e) {} }
+  document.querySelectorAll("[data-theme-opt]").forEach(b =>
+    b.classList.toggle("on", b.dataset.themeOpt === themeMode));
+  renderThemeCards();
+}
+document.querySelectorAll("[data-theme-opt]").forEach(b => b.onclick = () => applyTheme(b.dataset.themeOpt));
+if (darkQuery) {
+  const onScheme = () => { if (themeMode === "system") applyTheme("system", false); };
+  if (darkQuery.addEventListener) darkQuery.addEventListener("change", onScheme);
+  else if (darkQuery.addListener) darkQuery.addListener(onScheme);
+}
 
 /* ─────────────────────────── switches ─────────────────────────── */
 function setSwitch(el, on) { if (el) el.setAttribute("aria-checked", on ? "true" : "false"); }
@@ -969,8 +984,9 @@ function renderSettings() {
   renderThemeCards();
 }
 function renderThemeCards() {
-  $("themeLight") && $("themeLight").classList.toggle("on", theme === "light");
-  $("themeDark") && $("themeDark").classList.toggle("on", theme === "dark");
+  $("themeLight") && $("themeLight").classList.toggle("on", themeMode === "light");
+  $("themeDark") && $("themeDark").classList.toggle("on", themeMode === "dark");
+  $("themeSystem") && $("themeSystem").classList.toggle("on", themeMode === "system");
 }
 
 /* ─────────────────────────── command palette ─────────────────────────── */
@@ -990,8 +1006,9 @@ function cmdActions() {
     { group: "Actions", label: "Power off", icon: "i-power", run: () => api("power", false) },
     { group: "Actions", label: (S && S.ambi_running) ? "Stop Ambilight" : "Start Ambilight", icon: "i-screen",
       run: () => api(S && S.ambi_running ? "ambi_stop" : "ambi_start") },
-    { group: "Actions", label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme", icon: "i-appearance",
-      run: () => applyTheme(theme === "dark" ? "light" : "dark") },
+    { group: "Appearance", label: "Light mode", icon: "i-sun", run: () => applyTheme("light") },
+    { group: "Appearance", label: "Dark mode", icon: "i-moon", run: () => applyTheme("dark") },
+    { group: "Appearance", label: "Match Windows theme", icon: "i-appearance", run: () => applyTheme("system") },
     { group: "Actions", label: "Pick colour from screen", icon: "i-eyedrop", run: pickFromScreen }
   );
   AMBI_PRESETS.forEach(n => acts.push({
@@ -1348,6 +1365,7 @@ function bind() {
   bindSwitch($("stMotion"), on => api("set_pref", "reduce_motion", on).then(st => st && st.cfg && applyState(st)));
   $("themeLight").onclick = () => applyTheme("light");
   $("themeDark").onclick = () => applyTheme("dark");
+  $("themeSystem").onclick = () => applyTheme("system");
   $("btRefresh").onclick = () => api("bt_refresh");
   $("btOn").onclick = () => { api("bt_enable"); toast("Trying to enable Bluetooth"); };
   $("btSettings").onclick = () => api("bt_settings");
@@ -1379,8 +1397,8 @@ async function boot() {
   try {
     const st = await api("get_state");
     applyState(st);
-    const savedTheme = (st.cfg && st.cfg.ui_theme) || theme;
-    if (savedTheme !== theme) applyTheme(savedTheme, false);
+    const savedTheme = (st.cfg && st.cfg.ui_theme) || themeMode;
+    if (savedTheme !== themeMode) applyTheme(savedTheme, false);
     renderAll();          // one-time full render; interactions stay page-scoped
     page = "";
     showPage("devices");

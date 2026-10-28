@@ -591,7 +591,7 @@ input[type="number"] { width: 60px; font-variant-numeric: tabular-nums; }
   background: var(--surface-3); border: 1px solid var(--line);
   border-radius: var(--r-sm); padding: 8px 10px; word-break: break-all;
 }
-.theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.theme-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .theme-card {
   border: 1.5px solid var(--line); border-radius: var(--r-md); padding: 8px;
   background: var(--surface); text-align: left;
@@ -613,6 +613,32 @@ input[type="number"] { width: 60px; font-variant-numeric: tabular-nums; }
 .preview-dark .side { background: #111527; border-right: 1px solid #212945; }
 .preview-dark .bar { background: #212945; }
 .preview-dark .bar:first-child { background: #8B8CF9; width: 60%; }
+
+.theme-seg {
+  display: inline-flex; padding: 2px; gap: 2px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface-3);
+}
+.theme-seg button {
+  width: 28px; height: 26px; display: grid; place-items: center;
+  border: 0; border-radius: 6px; background: transparent; color: var(--ink-3);
+  transition: background var(--t-fast), color var(--t-fast), box-shadow var(--t-fast);
+}
+.theme-seg button svg { width: 14px; height: 14px; }
+.theme-seg button:hover { color: var(--ink); }
+.theme-seg button.on { background: var(--surface); color: var(--brand); box-shadow: var(--shadow-xs); }
+
+.preview-split { display: flex; }
+.preview-split .half { flex: 1; padding: 7px 6px; display: grid; gap: 5px; align-content: start; }
+.preview-split .half + .half { border-left: 1px solid rgba(128, 128, 128, .25); }
+
+@media (prefers-reduced-motion: no-preference) {
+  html.theming body, html.theming .card, html.theming .sidebar, html.theming .topbar,
+  html.theming .btn, html.theming .status-chip, html.theming input, html.theming select,
+  html.theming .nav-item, html.theming .mini-card {
+    transition: background-color 260ms ease, color 260ms ease,
+                border-color 260ms ease, box-shadow 260ms ease;
+  }
+}
 
 /* ---------- log ---------- */
 .log {

@@ -98,9 +98,11 @@
         </button>
         <span class="status-chip" id="chipConn"><span class="dot"></span><span id="chipConnText">0 connected</span></span>
         <span class="status-chip" id="chipAmbi"><span class="dot"></span><span id="chipAmbiText">Ambi idle</span></span>
-        <button class="icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle color theme">
-          <svg id="themeIcon"><use href="#i-moon"/></svg>
-        </button>
+        <div class="theme-seg" id="themeSeg" role="group" aria-label="Theme">
+          <button data-theme-opt="light" title="Light mode" aria-label="Light mode"><svg><use href="#i-sun"/></svg></button>
+          <button data-theme-opt="dark" title="Dark mode" aria-label="Dark mode"><svg><use href="#i-moon"/></svg></button>
+          <button data-theme-opt="system" title="Match Windows theme" aria-label="Match Windows theme"><svg><use href="#i-appearance"/></svg></button>
+        </div>
         <div class="seg" role="group" aria-label="Power">
           <button id="pwrOff">OFF</button>
           <button id="pwrOn" class="green">ON</button>
@@ -833,6 +835,13 @@
                   <button class="theme-card" id="themeDark">
                     <div class="theme-preview preview-dark"><div class="side"></div><div class="body"><div class="bar"></div><div class="bar"></div><div class="bar" style="width:70%"></div></div></div>
                     <div class="cap">Dark</div><div class="sub">Midnight &amp; violet</div>
+                  </button>
+                  <button class="theme-card" id="themeSystem">
+                    <div class="theme-preview preview-split">
+                      <div class="half preview-light"><div class="bar"></div><div class="bar" style="width:65%"></div></div>
+                      <div class="half preview-dark"><div class="bar"></div><div class="bar" style="width:65%"></div></div>
+                    </div>
+                    <div class="cap">System</div><div class="sub">Follow Windows</div>
                   </button>
                 </div>
               </div>

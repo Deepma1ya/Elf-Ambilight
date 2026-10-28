@@ -961,7 +961,9 @@ class Api:
 
     def set_theme(self, name):
         """Persist the UI theme immediately (not a staged setting)."""
-        name = "dark" if str(name).lower() == "dark" else "light"
+        name = str(name).lower()
+        if name not in ("light", "dark", "system"):
+            name = "light"
         _B().cfg.ui_theme = name
         _B()._save_keys({"ui_theme": name})
         return {"theme": name}
