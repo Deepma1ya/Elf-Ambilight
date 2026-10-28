@@ -19,8 +19,8 @@ let color = { r: 255, g: 255, b: 255 };
 let modeFilter = "";
 let modeCat = "All";
 
-const PAGES = ["devices", "color", "tune", "modes", "timing", "ambi", "settings"];
-const TITLES = { devices: "Devices", color: "Colors", tune: "Calibration", modes: "Effects", timing: "Schedule", ambi: "Ambilight", settings: "Settings" };
+const PAGES = ["devices", "color", "tune", "modes", "studio", "timing", "ambi", "settings"];
+const TITLES = { devices: "Devices", color: "Colors", tune: "Calibration", modes: "Effects", studio: "Studio", timing: "Schedule", ambi: "Ambilight", settings: "Settings" };
 const DAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const AMBI_PRESETS = ["Movie", "Game", "Balanced", "Chill", "Party"];
 const WHEEL = 248;
@@ -265,6 +265,7 @@ const RENDERERS = {
   color: () => renderColor(),
   tune: () => renderTune(),
   modes: () => renderModes(),
+  studio: () => renderStudio(),
   timing: () => renderTiming(),
   ambi: () => renderAmbi(),
   settings: () => renderSettings(),
@@ -1025,6 +1026,84 @@ function renderTiming() {
   });
 }
 
+/* ─────────────────────────── studio ─────────────────────────── */
+let pickedFile = "";
+const MEDIA_GENS = [
+  ["rainbow", "Rainbow sweep", "Full-spectrum rotation"],
+  ["pulse", "Breathing pulse", "Fades the colour selected in Colors"],
+  ["chase", "Colour chase", "Pulsing version of the current colour"],
+  ["fire", "Fire flicker", "Warm, irregular flicker"],
+  ["ocean", "Ocean wave", "Slow blue swell"],
+];
+function baseName(p) {
+  if (!p) return "";
+  const parts = String(p).split(/[\\/]/);
+  return parts[parts.length - 1] || p;
+}
+function mediaUI(m) {
+  if (!m) return;
+  const running = !!m.running;
+  const badge = $("mediaBadge");
+  if (badge) {
+    badge.textContent = running ? "Playing" : "Idle";
+    badge.className = "badge " + (running ? "ok" : "");
+  }
+  if ($("mediaName")) {
+    $("mediaName").textContent = (m.name && (running || m.frames)) ? m.name : "Nothing playing";
+  }
+  if ($("mediaStat")) {
+    let stat = "—";
+    if (running) {
+      stat = (m.mode || "").startsWith("gen:") ? "Generated animation" : "File";
+      stat += ` · ${Math.round(m.fps || 30)} fps · ${m.brightness || 100}%`;
+    } else if (m.error) {
+      stat = m.error;
+    }
+    $("mediaStat").textContent = stat;
+  }
+  if ($("mediaFrames")) $("mediaFrames").textContent = `${m.frames || 0} frames`;
+  if ($("mediaPrev")) $("mediaPrev").style.background = hx(...(m.color || [0, 0, 0]));
+}
+function renderStudio() {
+  const m = S.media || {};
+  const fps = m.fps || S.cfg.media_fps || 30;
+  const bri = m.brightness || S.cfg.media_brightness || 100;
+  $("mediaFps").value = fps;
+  $("mediaBri").value = bri;
+  $("mediaFpsVal").textContent = Math.round(fps);
+  $("mediaBriVal").textContent = Math.round(bri) + "%";
+  setSwitch($("mediaLoop"), m.loop !== undefined ? !!m.loop : !!S.cfg.media_loop);
+  paintRange($("mediaFps")); paintRange($("mediaBri"));
+  $("mediaPath").textContent = S.media_last_file ? baseName(S.media_last_file) : "No file selected";
+  $("mediaPath").title = S.media_last_file || "";
+  if (!pickedFile) pickedFile = S.media_last_file || "";
+  const box = $("mediaGens");
+  if (box && !box.dataset.ready) {
+    box.dataset.ready = "1";
+    MEDIA_GENS.forEach(([id, label, desc]) => {
+      const b = document.createElement("button");
+      b.className = "btn sm";
+      b.style.cssText = "justify-content:flex-start;text-align:left;height:auto;padding:9px 10px";
+      b.innerHTML = `<svg><use href="#i-play"/></svg><span><span style="display:block;font-weight:650">${label}</span><span style="display:block;font-size:10px;color:var(--ink-3);font-weight:400">${desc}</span></span>`;
+      b.onclick = () => startMedia("gen:" + id);
+      box.appendChild(b);
+    });
+  }
+  mediaUI(m);
+}
+function startMedia(mode, path) {
+  const fps = +$("mediaFps").value;
+  const bri = +$("mediaBri").value;
+  const loop = $("mediaLoop").getAttribute("aria-checked") === "true";
+  api("media_start", mode, path || "", fps, bri, loop, [color.r, color.g, color.b])
+    .then(res => {
+      if (res && res.state) applyState(res.state);
+      if (res && res.ok) toast(mode === "file" ? "Playing file" : "Animation started");
+      else toast((res && res.error) || "Could not start playback", "err");
+    })
+    .catch(() => toast("Could not start playback", "err"));
+}
+
 /* ─────────────────────────── ambilight ─────────────────────────── */
 function renderAmbi() {
   const a = S.cfg;
@@ -1352,6 +1431,12 @@ function handleEvent(evt) {
       }
       case "ambi_state":
         S.ambi_running = evt.running; renderChrome(); renderAmbi(); break;
+      case "media_tick":
+        if (evt.media) { S.media = evt.media; mediaUI(evt.media); }
+        break;
+      case "media_state":
+        if (evt.media) { S.media = evt.media; renderStudio(); }
+        break;
       case "state": applyState(evt.state); break;
     }
   } catch (e) { console.error(e); }
@@ -1530,6 +1615,29 @@ function bind() {
   $("mbSl").onchange = () => sendQuiet(api("set_brightness", +$("mbSl").value, "ALL"));
   $("mbSend").onclick = () => sendQuiet(api("set_brightness", +$("mbSl").value, "ALL")).then(() => toast("Brightness sent"));
 
+  // studio
+  $("mediaPick").onclick = () => api("media_pick").then(p => {
+    if (!p) return;
+    pickedFile = p;
+    $("mediaPath").textContent = baseName(p);
+    $("mediaPath").title = p;
+    toast("File selected");
+  });
+  $("mediaStartFile").onclick = () => startMedia("file", pickedFile || S.media_last_file);
+  $("mediaStop").onclick = () => api("media_stop").then(st => {
+    if (st && st.cfg) applyState(st);
+    toast("Playback stopped");
+  });
+  $("mediaFps").oninput = () => {
+    $("mediaFpsVal").textContent = Math.round(+$("mediaFps").value);
+    paintRange($("mediaFps"));
+  };
+  $("mediaBri").oninput = () => {
+    $("mediaBriVal").textContent = Math.round(+$("mediaBri").value) + "%";
+    paintRange($("mediaBri"));
+  };
+  bindSwitch($("mediaLoop"), () => {});
+
   // timing
   $("syncTimeBtn").onclick = () => api("sync_time").then(() => toast("Strip clock synced"));
   $("schedAdd").onclick = () => mut(api("sched_add")).then(renderTiming);
@@ -1625,7 +1733,7 @@ document.addEventListener("keydown", e => {
     if ($("modalWrap").classList.contains("on")) { dismissModal(); return; }
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); doSave(); }
-  if (e.altKey && e.key >= "1" && e.key <= "7") { e.preventDefault(); showPage(PAGES[+e.key - 1]); }
+  if (e.altKey && e.key >= "1" && e.key <= "8") { e.preventDefault(); showPage(PAGES[+e.key - 1]); }
 });
 
 /* ─────────────────────────── boot ─────────────────────────── */

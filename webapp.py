@@ -29,6 +29,7 @@ from ambilight import Ambilight
 from config import Config, CONFIG_PATH
 from bt_helper import bt_service_running, try_enable_bluetooth, open_bluetooth_settings
 import app_rules
+import media_player
 from startup_helper import (startup_enabled, set_startup, task_enabled,
                             is_elevated, relaunch_elevated_task,
                             enable_high_priority)
@@ -130,6 +131,7 @@ class Backend:
         self._hidden_for_sync = False
         self._ambi_rule_owner = None
         self._rule_prev: set[int] = set()
+        self.media = None
         from collections import deque
         self._events = deque()
         self._monitors_cache = None
@@ -256,6 +258,13 @@ class Backend:
             "dyn_lamps": int(getattr(self.dynlight, "lamp_count", 0) or 0),
             "dyn_on": bool(self.cfg.dynlight_enabled),
             "ambi_running": bool(self.ambilight.running),
+            "media": (self.media.snapshot() if self.media is not None else {
+                "running": False, "mode": "", "name": "", "frames": 0,
+                "fps": float(self.cfg.media_fps),
+                "brightness": int(self.cfg.media_brightness),
+                "loop": bool(self.cfg.media_loop), "color": [0, 0, 0], "error": "",
+            }),
+            "media_last_file": self.cfg.media_last_file,
             "monitors": mons,
             "mode_names": list(MODES),
             "recent": [list(c) for c in self.cfg.recent_colors],
@@ -447,6 +456,98 @@ class Backend:
             self.cfg.last_mode = m
             self._send_pkt(pkt_mode(m), f"sched '{name}' mode {m}")
 
+    # ── Studio: continuous RGB playback ──
+    def _media_send(self, r: int, g: int, b: int):
+        try:
+            c = self.cfg
+            cr, cg, cb = c.cal_apply(int(r), int(g), int(b))
+        except Exception:
+            cr, cg, cb = int(r), int(g), int(b)
+        try:
+            targets = self._targets()
+        except Exception:
+            targets = []
+        try:
+            from dynlight import VIRTUAL_ADDR
+        except Exception:
+            VIRTUAL_ADDR = "dynlight://pc"
+        ble = [a for a in targets if a != VIRTUAL_ADDR and self.ble.is_connected(a)]
+        if ble:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.ble.write_many(ble, pkt_color_realtime(cr, cg, cb), response=False),
+                    self.runner.loop)
+            except Exception:
+                pass
+        if VIRTUAL_ADDR in targets:
+            try:
+                if self.dynlight is not None:
+                    self.dynlight.push(cr, cg, cb)
+            except Exception:
+                pass
+
+    def media_start(self, mode: str, path: str = "", fps: float = 30.0,
+                    brightness: int = 100, loop: bool = True, color=None):
+        if self.ambilight.running:
+            self.ambi_stop()
+        try:
+            base = tuple(int(x) for x in (color or [self.cfg.last_r, self.cfg.last_g, self.cfg.last_b])[:3])
+        except Exception:
+            base = (255, 255, 255)
+        mp = media_player.MediaPlayer(self._media_send, self._targets, base_color=base)
+        if not mp.start(mode, path, fps, brightness, loop, base):
+            return {"ok": False, "error": mp.error or "Could not start playback.",
+                    "state": self.get_state()}
+        if self.media is not None:
+            self.media.stop()
+        self.media = mp
+        c = self.cfg
+        c.media_fps = float(mp.fps)
+        c.media_brightness = int(mp.brightness)
+        c.media_loop = bool(mp.loop)
+        if mode == "file":
+            c.media_last_file = path
+        self._save_keys({
+            "media_fps": c.media_fps, "media_brightness": c.media_brightness,
+            "media_loop": c.media_loop, "media_last_file": c.media_last_file,
+        })
+        self.log(f"Studio: playing {mp.name} at {mp.fps:.0f}fps.")
+        try:
+            self.push({"t": "media_state", "media": mp.snapshot()})
+        except Exception:
+            pass
+        return {"ok": True, "state": self.get_state(), "media": mp.snapshot()}
+
+    def media_stop(self):
+        if self.media is not None:
+            self.media.stop()
+            self.log("Studio: playback stopped.")
+        snap = self.media.snapshot() if self.media else None
+        self.media = None
+        try:
+            self.push({"t": "media_state",
+                       "media": snap or {"running": False}})
+        except Exception:
+            pass
+        return self.get_state()
+
+    def media_tick_loop(self):
+        while not self._quitting:
+            try:
+                if self.media is not None:
+                    snap = self.media.snapshot()
+                    self.push({"t": "media_tick", "media": snap})
+                    if not snap.get("running"):
+                        self.log(f"Studio: finished {snap.get('name') or 'playback'}.")
+                        self.media = None
+                        self.push({"t": "media_state", "media": snap})
+            except Exception:
+                pass
+            for _ in range(5):
+                if self._quitting:
+                    break
+                time.sleep(0.1)
+
     # ── ambilight lifecycle ──
     def apply_ambi_preset(self, name: str) -> bool:
         """Apply a built-in or custom Ambilight preset to config + engine."""
@@ -578,6 +679,8 @@ class Backend:
         return False
 
     def ambi_start(self, owner=None) -> bool:
+        if self.media is not None and self.media.running:
+            self.media_stop()
         try:
             import mss  # noqa
             from PIL import Image  # noqa
@@ -1448,6 +1551,34 @@ class Api:
         _B().log("Hide window while syncing " + ("ON." if on else "OFF."))
         return _B().get_state()
 
+    # ── Studio playback ──
+    def media_pick(self):
+        try:
+            import webview
+            w = _B().window
+            if w is None:
+                return ""
+            res = w.create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=False,
+                file_types=(
+                    "Media (*.gif;*.webp;*.apng;*.png;*.jpg;*.jpeg;*.bmp;*.mp4;*.mkv;*.avi;*.mov;*.webm;*.m4v)",
+                    "Animations (*.gif;*.webp;*.apng)",
+                    "Video (*.mp4;*.mkv;*.avi;*.mov;*.webm;*.m4v)",
+                    "All files (*.*)",
+                ))
+            if res:
+                return res[0] if isinstance(res, (list, tuple)) else str(res)
+        except Exception as e:
+            _B().log(f"File picker failed: {e}")
+        return ""
+
+    def media_start(self, mode, path="", fps=30, brightness=100, loop=True, color=None):
+        res = _B().media_start(mode, path, fps, brightness, loop, color)
+        return res
+
+    def media_stop(self):
+        return _B().media_stop()
+
     # ── per-app Ambilight rules ──
     def list_apps(self):
         try:
@@ -1776,6 +1907,11 @@ def main():
                     report["app_rules"] = len(app_rules.running_exes()) > 0
                 except Exception as e:
                     report["app_rules_error"] = str(e)[:200]
+                try:
+                    import media_player
+                    report["ffmpeg"] = bool(media_player.ffmpeg_path())
+                except Exception as e:
+                    report["media_error"] = str(e)[:200]
                 _selftest_write(report)
             finally:
                 back.begin_quit(force=True)
@@ -1804,6 +1940,7 @@ def main():
     threading.Thread(target=back.watchdog, daemon=True).start()
     threading.Thread(target=back.ambi_tick_loop, daemon=True).start()
     threading.Thread(target=back.app_rule_loop, daemon=True).start()
+    threading.Thread(target=back.media_tick_loop, daemon=True).start()
     if back.dynlight.enabled:
         threading.Timer(6.0, lambda: back.dynlight.request_refresh()).start()
     if back.cfg.auto_connect and back.cfg.last_addresses:

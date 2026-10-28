@@ -118,6 +118,12 @@ class Config:
     ambi_hide_window: bool = True  # hide the app while syncing so it never mirrors its own UI
     # per-app launch rules: [{exe, preset, auto_stop, enabled}]
     app_rules: list[dict] = field(default_factory=list)
+
+    # Studio media playback prefs
+    media_fps: float = 30.0
+    media_brightness: int = 100
+    media_loop: bool = True
+    media_last_file: str = ""
     ambi_white_floor: int = 0  # 0..100 min saturation % to show color; duller scenes show white. 0 = off
 
     # Windows Dynamic Lighting mirror (experimental, off by default)
@@ -416,6 +422,16 @@ class Config:
                                    if isinstance(r, dict)]
                 except Exception:
                     c.app_rules = []
+                try:
+                    c.media_fps = max(1.0, min(60.0, float(c.media_fps)))
+                except Exception:
+                    c.media_fps = 30.0
+                try:
+                    c.media_brightness = max(1, min(100, int(c.media_brightness)))
+                except Exception:
+                    c.media_brightness = 100
+                c.media_loop = bool(getattr(c, "media_loop", True))
+                c.media_last_file = str(getattr(c, "media_last_file", ""))[:400]
                 try:
                     c.ambi_white_floor = max(0, min(100, int(c.ambi_white_floor)))
                 except Exception:
