@@ -128,6 +128,8 @@ class Backend:
         self._tray = None
         from collections import deque
         self._events = deque()
+        self._monitors_cache = None
+        self._monitors_t = 0.0
 
     # ── push → JS ──
     # Thread-safe event queue drained by frontend poll() — never
@@ -269,8 +271,12 @@ class Backend:
         parts = [f"{self.cfg.names.get(a, '?')} {a}" for a in self.cfg.last_addresses]
         return "Remembered: " + "  ·  ".join(parts)
 
-    @staticmethod
-    def _list_monitors():
+    def _list_monitors(self):
+        """Monitor list is cached for 30 s: creating an MSS instance on every
+        state refresh costs ~0.5 ms and allocates a graphics context."""
+        now = time.monotonic()
+        if self._monitors_cache is not None and (now - self._monitors_t) < 30.0:
+            return self._monitors_cache
         items = [[0, "All monitors"]]
         try:
             import mss
@@ -280,6 +286,8 @@ class Backend:
                     items.append([i, "Monitor %d%s %dx%d" % (i, tag, m["width"], m["height"])])
         except Exception:
             items.append([1, "Monitor 1 (primary)"])
+        self._monitors_cache = items
+        self._monitors_t = now
         return items
 
     # ── background loops ──
@@ -1510,6 +1518,7 @@ def main():
             return None
 
         _selftest_write({"stage": "main reached", "version": APP_VERSION})
+        t_start = time.monotonic()
 
         def _selftest():
             try:
@@ -1526,6 +1535,7 @@ def main():
                     "version": APP_VERSION,
                     "webui": _webui_file("index.html"),
                     "private_mode": False,
+                    "boot_seconds": round(time.monotonic() - t_start, 2),
                 })
             finally:
                 back.begin_quit(force=True)

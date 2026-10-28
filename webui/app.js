@@ -178,11 +178,34 @@ function initTabs() {
 }
 
 /* ─────────────────────────── state ─────────────────────────── */
+const RENDERERS = {
+  devices: () => renderDevices(),
+  color: () => renderColor(),
+  tune: () => renderTune(),
+  modes: () => renderModes(),
+  timing: () => renderTiming(),
+  ambi: () => renderAmbi(),
+  settings: () => renderSettings(),
+};
+const stale = new Set(PAGES);
+
+function renderPage(name) {
+  if (!RENDERERS[name]) return;
+  try {
+    RENDERERS[name]();
+    paintAll($("pg-" + name));
+  } catch (e) { console.error(e); }
+  stale.delete(name);
+}
+
 function applyState(st, { markDirty = false } = {}) {
   if (!st || !st.cfg) return;
   S = st;
   dirty = markDirty ? true : !!st.dirty;
-  renderAll();
+  renderChrome();
+  PAGES.forEach(p => { if (p !== page) stale.add(p); });
+  if (page) renderPage(page);
+  renderSave();
 }
 async function mut(p) {
   try {
@@ -191,9 +214,31 @@ async function mut(p) {
     return st;
   } catch (e) { toast("Action failed", "err"); console.error(e); }
 }
+/* quiet send: merge returned state without re-rendering the active page */
+async function sendQuiet(p, markDirty = true) {
+  try {
+    const st = await p;
+    if (st && st.cfg) {
+      S = st;
+      if (markDirty) dirty = true;
+      PAGES.forEach(pg => { if (pg !== page) stale.add(pg); });
+      renderSave();
+    }
+    return st;
+  } catch (e) { console.error(e); return null; }
+}
+async function sendColor(r, g, b, msg) {
+  const st = await sendQuiet(api("set_color", r, g, b), true);
+  if (st && st.cfg) {
+    S.cfg.last_r = st.cfg.last_r; S.cfg.last_g = st.cfg.last_g; S.cfg.last_b = st.cfg.last_b;
+    S.recent = st.recent || S.recent;
+    renderRecent(); renderFavorites();
+  }
+  if (msg) toast(msg);
+}
 function renderAll() {
-  renderChrome(); renderDevices(); renderColor(); renderTune();
-  renderModes(); renderTiming(); renderAmbi(); renderSettings();
+  renderChrome();
+  PAGES.forEach(p => { RENDERERS[p](); stale.delete(p); });
   paintAll(); renderSave();
 }
 function renderChrome() {
@@ -245,6 +290,7 @@ async function showPage(next) {
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.page === next));
   $("crumbTitle").textContent = TITLES[next];
   $("scroll").scrollTop = 0;
+  if (stale.has(next)) renderPage(next);
 }
 
 /* ─────────────────────────── color model ─────────────────────────── */
@@ -264,8 +310,10 @@ function setColor(r, g, b, src) {
   $("gVal").textContent = color.g;
   $("bVal").textContent = color.b;
   syncWheelPointer(hh, ss);
-  paintAll($("pg-color"));
-  tunePreview();
+  ["hSl", "sSl", "lSl", "rSl", "gSl", "bSl", "wheelL"].forEach(id => {
+    const el = $(id); if (el) paintRange(el);
+  });
+  if (page === "tune") debounceTunePreview();
   renderHarmony(hh);
 }
 const liveSend = debounce(() => {
@@ -325,16 +373,28 @@ function wheelPick(ev) {
 function bindWheel() {
   const canvas = $("wheel");
   let dragging = false;
+  let pending = null;
+  let raf = 0;
+  const flush = () => {
+    raf = 0;
+    if (pending) { wheelPick(pending); pending = null; }
+  };
   canvas.addEventListener("pointerdown", e => {
     dragging = true;
     try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
     wheelPick(e);
   });
-  canvas.addEventListener("pointermove", e => { if (dragging) wheelPick(e); });
+  canvas.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    pending = e;
+    if (!raf) raf = requestAnimationFrame(flush);
+  });
   const end = () => {
     if (!dragging) return;
     dragging = false;
-    mut(api("set_color", color.r, color.g, color.b));
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    if (pending) { wheelPick(pending); pending = null; }
+    sendColor(color.r, color.g, color.b);
   };
   canvas.addEventListener("pointerup", end);
   canvas.addEventListener("pointercancel", end);
@@ -346,15 +406,26 @@ function renderHarmony(h) {
   const l = +$("wheelL").value;
   const s = rgb2hsl(color.r, color.g, color.b)[1];
   const offsets = [0, 30, -30, 180, 120, 240];
-  row.innerHTML = "";
+  if (!row.dataset.ready) {
+    row.dataset.ready = "1";
+    offsets.forEach((off, i) => {
+      const btn = document.createElement("button");
+      btn.title = i === 0 ? "Base" : i === 3 ? "Complementary" : "Analogous / triadic";
+      btn.onclick = () => {
+        const rgb = (btn.dataset.rgb || "").split(",").map(Number);
+        if (rgb.length === 3) { setColor(rgb[0], rgb[1], rgb[2]); sendColor(rgb[0], rgb[1], rgb[2]); }
+      };
+      row.appendChild(btn);
+    });
+  }
+  const buttons = row.querySelectorAll("button");
   offsets.forEach((off, i) => {
     const hue = (h + off + 360) % 360;
     const [r, g, b] = hsl2rgb(hue, Math.max(35, s), clamp(l, 25, 85));
-    const btn = document.createElement("button");
+    const btn = buttons[i];
+    if (!btn) return;
     btn.style.background = hx(r, g, b);
-    btn.title = i === 0 ? "Base" : i === 3 ? "Complementary" : "Analogous / triadic";
-    btn.onclick = () => { setColor(r, g, b); mut(api("set_color", r, g, b)); };
-    row.appendChild(btn);
+    btn.dataset.rgb = `${r},${g},${b}`;
   });
 }
 
@@ -376,8 +447,8 @@ function renderScenes() {
     btn.innerHTML = `<span style="width:12px;height:12px;border-radius:4px;background:${hx(r, g, b)};border:1px solid rgba(0,0,0,.15)"></span><span>${label}</span>`;
     btn.onclick = async () => {
       setColor(r, g, b);
-      await api("set_color", r, g, b);
-      await api("set_brightness", bri, "ALL");
+      await sendColor(r, g, b);
+      await sendQuiet(api("set_brightness", bri, "ALL"));
       $("briSl").value = bri; $("briVal").textContent = bri; paintRange($("briSl"));
       toast(`${label} scene applied`);
     };
@@ -492,7 +563,7 @@ function renderColor() {
   (S.color_presets || []).forEach(([r, g, b]) => {
     const b2 = document.createElement("button");
     b2.className = "sw"; b2.style.background = hx(r, g, b); b2.title = hx(r, g, b);
-    b2.onclick = () => { setColor(r, g, b); mut(api("set_color", r, g, b)); };
+    b2.onclick = () => { setColor(r, g, b); sendColor(r, g, b); };
     pr.appendChild(b2);
   });
   const rc = $("recentRow"); rc.innerHTML = "";
@@ -501,7 +572,7 @@ function renderColor() {
   recents.forEach(([r, g, b]) => {
     const b2 = document.createElement("button");
     b2.className = "sw"; b2.style.background = hx(r, g, b); b2.title = hx(r, g, b);
-    b2.onclick = () => { setColor(r, g, b); mut(api("set_color", r, g, b)); };
+    b2.onclick = () => { setColor(r, g, b); sendColor(r, g, b); };
     rc.appendChild(b2);
   });
   renderFavorites();
@@ -523,7 +594,7 @@ function renderFavorites() {
       if (e.shiftKey) {
         mut(api("favorite_remove", r, g, b)).then(() => { renderFavorites(); toast("Removed from favourites"); });
       } else {
-        setColor(r, g, b); mut(api("set_color", r, g, b));
+        setColor(r, g, b); sendColor(r, g, b);
       }
     };
     row.appendChild(b2);
@@ -572,12 +643,12 @@ function renderTune() {
       const v = document.createElement("span");
       v.className = "field-val"; v.textContent = vals[i];
       sl.oninput = () => { vals[i] = +sl.value; v.textContent = sl.value; paintRange(sl); };
-      sl.onchange = () => mut(api("tune_set", "prim", { attr, vals }));
+      sl.onchange = () => sendQuiet(api("tune_set", "prim", { attr, vals }));
       row.append(sl, v); block.appendChild(row); paintRange(sl);
     });
     block.querySelector("[data-show]").onclick = () => {
       const pure = { prim_r: [255, 0, 0], prim_g: [0, 255, 0], prim_b: [0, 0, 255], white_pt: [255, 255, 255] }[attr];
-      setColor(...pure); api("set_color", ...pure);
+      setColor(...pure); sendColor(...pure);
     };
     box.appendChild(block);
   });
@@ -586,7 +657,7 @@ function renderTune() {
   [[255,255,255],[128,128,128],[255,0,0],[0,255,0],[0,80,255],[255,220,0],[0,220,220],[170,60,255]].forEach(([r,g,b]) => {
     const b2 = document.createElement("button");
     b2.className = "sw"; b2.style.background = hx(r,g,b);
-    b2.onclick = () => { setColor(r, g, b); api("set_color", r, g, b); };
+    b2.onclick = () => { setColor(r, g, b); sendColor(r, g, b); };
     tt.appendChild(b2);
   });
   renderTuneProfiles();
@@ -605,7 +676,7 @@ function tuneLabels() {
   $("limVal").textContent = Math.round($("limSl").value) + "%";
 }
 async function tunePreview() {
-  if (!S) return;
+  if (!S || page !== "tune") return;
   try {
     const o = await api("cal_preview", color.r, color.g, color.b);
     if (!o) return;
@@ -614,9 +685,11 @@ async function tunePreview() {
     $("tuneTxt").textContent = `(${o.req.join(", ")}) → (${o.out.join(", ")})`;
   } catch (e) {}
 }
+const debounceTunePreview = debounce(() => { tunePreview(); }, 120);
 const tuneChanged = debounce(() => {
   tuneLabels();
-  mut(api("tune_set", "gains", {
+  debounceTunePreview();
+  sendQuiet(api("tune_set", "gains", {
     r: +$("grSl").value / 100, g: +$("ggSl").value / 100, b: +$("gbSl").value / 100,
     gamma: +$("gamSl").value, temp: +$("tmpSl").value, order: $("ordSel").value,
     gamma_r: +$("ggrSl").value, gamma_g: +$("gggSl").value, gamma_b: +$("ggbSl").value,
@@ -670,7 +743,12 @@ function renderModes() {
     b.className = "mode-btn" + (i === S.cfg.last_mode ? " on" : "");
     b.innerHTML = `<span class="n">${String(i).padStart(2, "0")}</span><span></span>`;
     b.querySelector("span:last-child").textContent = m;
-    b.onclick = () => mut(api("send_mode", i)).then(renderModes);
+    b.dataset.i = i;
+    b.onclick = async () => {
+      await api("send_mode", i);
+      if (S && S.cfg) { S.cfg.last_mode = i; dirty = true; renderSave(); }
+      markModeActive();
+    };
     grid.appendChild(b);
   });
   if (!shown) grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><b>No matches</b>Try another search or category.</div>`;
@@ -680,6 +758,14 @@ function renderModes() {
   $("spdVal").textContent = S.cfg.last_speed;
   $("mbSl").value = S.cfg.last_brightness;
   $("mbVal").textContent = S.cfg.last_brightness;
+}
+
+function markModeActive() {
+  const cur = S && S.cfg ? S.cfg.last_mode : -1;
+  document.querySelectorAll(".mode-btn").forEach(b => {
+    b.classList.toggle("on", +b.dataset.i === cur);
+  });
+  if (S) $("curMode").textContent = (S.mode_names || [])[cur] || "—";
 }
 
 /* ─────────────────────────── timing ─────────────────────────── */
@@ -847,7 +933,7 @@ function ambiLabels() {
 }
 const ambiChanged = debounce(() => {
   ambiLabels();
-  mut(api("ambi_set", {
+  sendQuiet(api("ambi_set", {
     fps: +$("aFps").value, smooth: +$("aSm").value, brightness: +$("aBri").value,
     min_delta: +$("aMd").value, white_floor: +$("aWf").value, interval: +$("aIv").value,
     mode: ambiMode, sample: $("ambiSample").value.toLowerCase(), monitor: +$("ambiMon").value,
@@ -916,7 +1002,7 @@ function cmdActions() {
                  ["Cyan", 0, 220, 230], ["Violet", 150, 80, 255], ["Rose", 255, 60, 120]];
   named.forEach(([l, r, g, b]) => acts.push({
     group: "Colours", label: l, icon: "i-palette",
-    run: () => { setColor(r, g, b); mut(api("set_color", r, g, b)); }
+    run: () => { setColor(r, g, b); sendColor(r, g, b); }
   }));
   return acts;
 }
@@ -984,8 +1070,7 @@ async function pickFromScreen() {
     const res = await new EyeDropper().open();
     const t = res.sRGBHex.replace("#", "");
     setColor(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16));
-    mut(api("set_color", color.r, color.g, color.b));
-    toast("Colour picked");
+    sendColor(color.r, color.g, color.b, "Colour picked");
   } catch (e) { /* user cancelled */ }
 }
 
@@ -1024,9 +1109,23 @@ function handleEvent(evt) {
     }
   } catch (e) { console.error(e); }
 }
-setInterval(() => {
-  try { api("poll").then(list => (list || []).forEach(handleEvent)).catch(() => {}); } catch (e) {}
-}, 450);
+let pollTimer = null;
+async function pollOnce() {
+  try {
+    if (!document.hidden && window.pywebview && window.pywebview.api) {
+      const list = await api("poll");
+      (list || []).forEach(handleEvent);
+    }
+  } catch (e) { /* bridge busy or closing */ }
+  pollTimer = setTimeout(pollOnce, document.hidden ? 1500 : 450);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    pollOnce();
+  }
+});
 
 /* ─────────────────────────── bindings ─────────────────────────── */
 function bind() {
@@ -1063,7 +1162,7 @@ function bind() {
   $("dynAdd").onclick = () => mut(api("group_add_many", ["dynlight://pc"])).then(() => toast("PC lighting added to group"));
   document.querySelectorAll("[data-group-action]").forEach(b => b.onclick = () => {
     const a = b.dataset.groupAction;
-    if (a === "color") mut(api("set_color", S.cfg.last_r, S.cfg.last_g, S.cfg.last_b)).then(() => toast("Colour sent to group"));
+    if (a === "color") sendColor(S.cfg.last_r, S.cfg.last_g, S.cfg.last_b, "Colour sent to group");
     else if (a === "on") { api("power", true); toast("Group powered on"); }
     else if (a === "off") { api("power", false); toast("Group powered off"); }
     else { api("bt_refresh"); api("connect_all"); toast("Refreshing connections"); }
@@ -1079,16 +1178,16 @@ function bind() {
     $("wheelLVal").textContent = $("wheelL").value + "%";
     liveSend();
   };
-  $("wheelL").onchange = () => mut(api("set_color", color.r, color.g, color.b));
+  $("wheelL").onchange = () => sendColor(color.r, color.g, color.b);
   const hsl = () => { setColor(...hsl2rgb(+$("hSl").value, +$("sSl").value, +$("lSl").value), "hsl"); liveSend(); };
-  ["hSl", "sSl", "lSl"].forEach(id => { $(id).oninput = hsl; $(id).onchange = () => mut(api("set_color", color.r, color.g, color.b)); });
+  ["hSl", "sSl", "lSl"].forEach(id => { $(id).oninput = hsl; $(id).onchange = () => sendColor(color.r, color.g, color.b); });
   const rgb = () => { setColor(+$("rSl").value, +$("gSl").value, +$("bSl").value, "rgb"); liveSend(); };
-  ["rSl", "gSl", "bSl"].forEach(id => { $(id).oninput = rgb; $(id).onchange = () => mut(api("set_color", color.r, color.g, color.b)); });
+  ["rSl", "gSl", "bSl"].forEach(id => { $(id).oninput = rgb; $(id).onchange = () => sendColor(color.r, color.g, color.b); });
   $("hexApply").onclick = () => {
     const t = $("hexIn").value.trim().replace(/^#/, "");
     if (!/^[0-9a-fA-F]{6}$/.test(t)) { toast("Enter a 6-digit hex colour", "err"); return; }
     setColor(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16));
-    mut(api("set_color", color.r, color.g, color.b));
+    sendColor(color.r, color.g, color.b);
   };
   $("hexIn").onkeydown = e => { if (e.key === "Enter") $("hexApply").click(); };
   $("copyHex").onclick = async () => {
@@ -1102,8 +1201,7 @@ function bind() {
     if (!res || !res.rgb) { toast("Could not read the screen", "err"); return; }
     const [r, g, b] = res.rgb;
     setColor(r, g, b);
-    await api("set_color", r, g, b);
-    toast(res.live ? "Matched live Ambilight colour" : "Matched screen colour");
+    await sendColor(r, g, b, res.live ? "Matched live Ambilight colour" : "Matched screen colour");
   };
   $("saveFav").onclick = () => mut(api("favorite_add", color.r, color.g, color.b)).then(() => toast("Colour saved"));
   $("randomColor").onclick = () => {
@@ -1112,22 +1210,21 @@ function bind() {
     const light = 42 + Math.random() * 22;
     const [r, g, b] = hsl2rgb(hue, sat, light);
     setColor(r, g, b);
-    mut(api("set_color", r, g, b));
-    toast("Random colour applied");
+    sendColor(r, g, b, "Random colour applied");
   };
-  $("applyColorBtn").onclick = () => mut(api("set_color", color.r, color.g, color.b)).then(() => toast("Colour sent"));
+  $("applyColorBtn").onclick = () => sendColor(color.r, color.g, color.b, "Colour sent");
   $("briSl").oninput = () => { $("briVal").textContent = $("briSl").value; paintRange($("briSl")); };
-  $("briSl").onchange = () => mut(api("set_brightness", +$("briSl").value, chan));
-  $("briSend").onclick = () => mut(api("set_brightness", +$("briSl").value, chan)).then(() => toast("Brightness sent"));
+  $("briSl").onchange = () => sendQuiet(api("set_brightness", +$("briSl").value, chan));
+  $("briSend").onclick = () => sendQuiet(api("set_brightness", +$("briSl").value, chan)).then(() => toast("Brightness sent"));
   $("chanSeg").querySelectorAll("button").forEach(b => b.onclick = () => {
     chan = b.dataset.ch;
     $("chanSeg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
   });
   $("wSl").oninput = () => { $("wVal").textContent = $("wSl").value; paintRange($("wSl")); };
-  $("wSend").onclick = () => mut(api("set_w", +$("wSl").value)).then(() => toast("White sent"));
+  $("wSend").onclick = () => sendQuiet(api("set_w", +$("wSl").value)).then(() => toast("White sent"));
   $("warmSl").oninput = () => { $("warmVal").textContent = $("warmSl").value; paintRange($("warmSl")); };
   $("coldSl").oninput = () => { $("coldVal").textContent = $("coldSl").value; paintRange($("coldSl")); };
-  $("cctSend").onclick = () => mut(api("set_cct", +$("warmSl").value, +$("coldSl").value)).then(() => toast("White balance sent"));
+  $("cctSend").onclick = () => sendQuiet(api("set_cct", +$("warmSl").value, +$("coldSl").value)).then(() => toast("White balance sent"));
   $("rgbwSend").onclick = () => api("set_rgbw", $("chRgb").checked, $("chW").checked, $("chCct").checked, chan).then(() => toast("Channels updated"));
   $("pinsSend").onclick = () => api("set_pins", +$("pin1").value, +$("pin2").value, +$("pin3").value).then(() => toast("Pin order sent"));
 
@@ -1170,18 +1267,21 @@ function bind() {
 
   // modes
   $("modeSearch").oninput = debounce(e => { modeFilter = e.target.value; renderModes(); }, 120);
-  $("randomMode").onclick = () => {
+  $("randomMode").onclick = async () => {
     const names = S.mode_names || [];
     if (!names.length) return;
     const i = Math.floor(Math.random() * names.length);
-    mut(api("send_mode", i)).then(() => { renderModes(); toast(`Effect: ${names[i]}`); });
+    await api("send_mode", i);
+    if (S && S.cfg) { S.cfg.last_mode = i; dirty = true; renderSave(); }
+    markModeActive();
+    toast(`Effect: ${names[i]}`);
   };
   $("spdSl").oninput = () => { $("spdVal").textContent = $("spdSl").value; paintRange($("spdSl")); };
-  $("spdSl").onchange = () => mut(api("send_speed", +$("spdSl").value));
-  $("spdSend").onclick = () => mut(api("send_speed", +$("spdSl").value)).then(() => toast("Speed sent"));
+  $("spdSl").onchange = () => sendQuiet(api("send_speed", +$("spdSl").value));
+  $("spdSend").onclick = () => sendQuiet(api("send_speed", +$("spdSl").value)).then(() => toast("Speed sent"));
   $("mbSl").oninput = () => { $("mbVal").textContent = $("mbSl").value; paintRange($("mbSl")); };
-  $("mbSl").onchange = () => mut(api("set_brightness", +$("mbSl").value, "ALL"));
-  $("mbSend").onclick = () => mut(api("set_brightness", +$("mbSl").value, "ALL")).then(() => toast("Brightness sent"));
+  $("mbSl").onchange = () => sendQuiet(api("set_brightness", +$("mbSl").value, "ALL"));
+  $("mbSend").onclick = () => sendQuiet(api("set_brightness", +$("mbSl").value, "ALL")).then(() => toast("Brightness sent"));
 
   // timing
   $("syncTimeBtn").onclick = () => api("sync_time").then(() => toast("Strip clock synced"));
@@ -1281,13 +1381,16 @@ async function boot() {
     applyState(st);
     const savedTheme = (st.cfg && st.cfg.ui_theme) || theme;
     if (savedTheme !== theme) applyTheme(savedTheme, false);
+    renderAll();          // one-time full render; interactions stay page-scoped
     page = "";
     showPage("devices");
     pushLog("UI ready.");
+    pollOnce();
     api("ui_booted", {
       pages: document.querySelectorAll(".page").length,
       modes: document.querySelectorAll(".mode-btn").length,
-      presets: document.querySelectorAll("#presetRow .sw").length
+      presets: document.querySelectorAll("#presetRow .sw").length,
+      boot_ms: Math.round(performance.now())
     });
   } catch (e) {
     console.error(e);

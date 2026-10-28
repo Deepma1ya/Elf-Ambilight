@@ -115,7 +115,7 @@ def task_enabled(force: bool = False) -> bool:
     would launch several console processes (hidden, but wasteful)."""
     global _TASK_CACHE_T, _TASK_CACHE_V
     now = time.monotonic()
-    if not force and (now - _TASK_CACHE_T) < 4.0:
+    if not force and (now - _TASK_CACHE_T) < 300.0:
         return _TASK_CACHE_V
     try:
         r = run_hidden(["schtasks", "/Query", "/TN", TASK_NAME], timeout=15)

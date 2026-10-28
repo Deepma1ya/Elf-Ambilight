@@ -603,7 +603,11 @@ class Ambilight:
                                    int(round(fs[2] + (ft[2] - fs[2]) * p)))
                     self._shown = [float(cur[0]), float(cur[1]), float(cur[2])]
                     self.last_color = cur
-                    if cur != self._last_sent:
+                    # BLE radios top out well below 60 Hz; capping writes
+                    # keeps the fade smooth locally and stops the stack from
+                    # queuing redundant packets. Always send the settled value.
+                    due = (now - self.last_send) >= 0.028 or cur == self._fade_target
+                    if cur != self._last_sent and due:
                         raw = self.get_targets()
                         targets = [a for a in raw if self.ble.is_connected(a)]
                         if targets:
