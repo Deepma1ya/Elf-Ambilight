@@ -1081,6 +1081,91 @@ function renderAmbi() {
     t.innerHTML = `<div class="chip-c" id="tile-${k}"></div><div class="lbl">${k.slice(0, 3)}</div>`;
     tiles.appendChild(t);
   });
+  renderRules();
+}
+
+/* ─────────────────────────── app rules ─────────────────────────── */
+let ruleAppsLoaded = false;
+function presetNames() {
+  return ["(current settings)", ...AMBI_PRESETS, ...Object.keys(S.ambi_custom || {}).sort()];
+}
+function fillPresetSelect(sel, current) {
+  sel.innerHTML = "";
+  presetNames().forEach(n => {
+    const o = document.createElement("option");
+    o.value = n === "(current settings)" ? "" : n;
+    o.textContent = n;
+    sel.appendChild(o);
+  });
+  sel.value = current || "";
+}
+function renderRules() {
+  const list = $("ruleList");
+  if (!list) return;
+  const badge = $("ruleCount");
+  const rules = S.cfg.app_rules || [];
+  badge.textContent = `${rules.length} rule${rules.length === 1 ? "" : "s"}`;
+  badge.className = "badge " + (rules.length ? "brand" : "");
+
+  const addSel = $("rulePreset");
+  if (addSel) fillPresetSelect(addSel, addSel.value);
+
+  list.innerHTML = "";
+  if (!rules.length) {
+    list.innerHTML = `<div class="empty"><b>No launch rules</b>Add one above: Ambilight starts when that app runs and stops when it closes.</div>`;
+    return;
+  }
+  rules.forEach((r, idx) => {
+    const row = document.createElement("div");
+    row.className = "list-row"; row.style.flexWrap = "wrap";
+    row.style.setProperty("--i", Math.min(idx, 8));
+
+    const main = document.createElement("div");
+    main.className = "list-main";
+    main.innerHTML = `<div class="list-t"></div><div class="list-s"></div>`;
+    main.querySelector(".list-t").textContent = r.exe;
+    main.querySelector(".list-s").textContent = r.preset ? `Preset: ${r.preset}` : "Preset: current settings";
+
+    const preset = document.createElement("select");
+    preset.style.minWidth = "150px";
+    fillPresetSelect(preset, r.preset || "");
+    preset.onchange = () => mut(api("app_rule_update", idx, { preset: preset.value }));
+
+    const stopLbl = document.createElement("label");
+    stopLbl.className = "check";
+    const stopChk = document.createElement("input");
+    stopChk.type = "checkbox"; stopChk.checked = !!r.auto_stop;
+    stopChk.onchange = () => mut(api("app_rule_update", idx, { auto_stop: stopChk.checked }));
+    stopLbl.append(stopChk, "Stop on close");
+
+    const en = document.createElement("button");
+    en.className = "switch"; en.setAttribute("role", "switch");
+    en.setAttribute("aria-checked", r.enabled ? "true" : "false");
+    en.setAttribute("aria-label", "Enable rule");
+    bindSwitch(en, on => mut(api("app_rule_update", idx, { enabled: on })));
+
+    const del = document.createElement("button");
+    del.className = "btn sm ghost"; del.innerHTML = `<svg><use href="#i-x"/></svg>`;
+    del.title = "Delete rule";
+    del.onclick = () => mut(api("app_rule_delete", idx)).then(() => toast("Rule removed"));
+
+    row.append(main, preset, stopLbl, en, del);
+    list.appendChild(row);
+  });
+
+  if (!ruleAppsLoaded) {
+    ruleAppsLoaded = true;
+    api("list_apps").then(names => {
+      const sel = $("ruleApp");
+      if (!sel) return;
+      sel.innerHTML = `<option value="">Pick a running app…</option>`;
+      (names || []).forEach(n => {
+        const o = document.createElement("option");
+        o.value = n; o.textContent = n;
+        sel.appendChild(o);
+      });
+    }).catch(() => {});
+  }
 }
 function ambiLabels() {
   $("aFpsV").textContent = Math.round($("aFps").value);
@@ -1496,6 +1581,18 @@ function bind() {
     const n = $("ambiCustomSel").value;
     if (!n) return toast("No preset selected", "err");
     if (await askConfirm("Delete preset", `Delete “${n}”?`)) mut(api("ambi_custom_delete", n)).then(() => toast("Preset deleted"));
+  };
+
+  $("ruleAdd").onclick = () => {
+    const exe = ($("ruleExe").value.trim() || $("ruleApp").value || "").trim();
+    if (!exe) { toast("Pick a running app or type its exe name", "err"); return; }
+    const preset = $("rulePreset").value;
+    const stop = $("ruleAutoStop").checked;
+    mut(api("app_rule_add", exe, preset, stop)).then(() => {
+      $("ruleExe").value = "";
+      $("ruleApp").value = "";
+      toast(`Rule added for ${exe}`);
+    });
   };
 
   // settings

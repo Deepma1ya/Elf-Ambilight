@@ -614,6 +614,7 @@
           <button class="tab" data-tab="capture">Capture</button>
           <button class="tab" data-tab="engine">Engine</button>
           <button class="tab" data-tab="presets">Presets</button>
+          <button class="tab" data-tab="rules">Rules</button>
         </div>
 
         <div class="tabpanel on" data-panel="ambi-main:live">
@@ -739,6 +740,31 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="tabpanel" data-panel="ambi-main:rules">
+          <div class="card">
+            <div class="card-head">
+              <div><h3>Launch rules</h3><div class="hint">Turn Ambilight on when a chosen app is running — VLC, Media Player, a game, anything.</div></div>
+              <div class="push"><span class="badge" id="ruleCount">0</span></div>
+            </div>
+            <div class="card-body">
+              <div class="field" style="gap:6px;flex-wrap:wrap">
+                <select id="ruleApp" style="min-width:180px">
+                  <option value="">Pick a running app…</option>
+                </select>
+                <input type="text" id="ruleExe" placeholder="or type vlc.exe" style="width:150px">
+                <select id="rulePreset" style="min-width:160px"></select>
+                <label class="check"><input type="checkbox" id="ruleAutoStop" checked>Stop when it closes</label>
+                <button class="btn sm primary" id="ruleAdd"><svg><use href="#i-plus"/></svg>Add rule</button>
+              </div>
+              <p class="hint" style="margin-top:9px">Checked every 2 seconds. Starting Ambilight from a rule respects “Hide window while syncing”.</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h3>Active rules</h3><div class="hint">Edge-triggered: fires when the app opens, stops when it closes.</div></div></div>
+            <div class="card-body"><div class="row-list" id="ruleList"></div></div>
           </div>
         </div>
       </section>

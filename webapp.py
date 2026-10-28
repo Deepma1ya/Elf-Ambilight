@@ -28,6 +28,7 @@ from ble_manager import ElfBLE
 from ambilight import Ambilight
 from config import Config, CONFIG_PATH
 from bt_helper import bt_service_running, try_enable_bluetooth, open_bluetooth_settings
+import app_rules
 from startup_helper import (startup_enabled, set_startup, task_enabled,
                             is_elevated, relaunch_elevated_task,
                             enable_high_priority)
@@ -127,6 +128,8 @@ class Backend:
         self.ambilight.dynlight = self.dynlight
         self._tray = None
         self._hidden_for_sync = False
+        self._ambi_rule_owner = None
+        self._rule_prev: set[int] = set()
         from collections import deque
         self._events = deque()
         self._monitors_cache = None
@@ -445,6 +448,110 @@ class Backend:
             self._send_pkt(pkt_mode(m), f"sched '{name}' mode {m}")
 
     # ── ambilight lifecycle ──
+    def apply_ambi_preset(self, name: str) -> bool:
+        """Apply a built-in or custom Ambilight preset to config + engine."""
+        from config import Config as _Cfg
+        p = AMBI_BUILTINS.get(name)
+        if p is None:
+            p = (self.cfg.ambi_custom_presets or {}).get(name)
+        if not p:
+            return False
+        has_xf = "crossfade" in p
+        has_dx = "dxcam" in p
+        has_wf = "white_floor" in p
+        p = _Cfg._clean_ambi_preset(dict(p))
+        c = self.cfg
+        e = self.ambilight
+        e.fps = c.ambi_fps = p["fps"]
+        e.smooth = c.ambi_smooth = p["smooth"]
+        e.brightness = c.ambi_brightness = p["brightness"]
+        e.min_delta = c.ambi_min_delta = p["min_delta"]
+        e.update_interval = c.ambi_interval = p["interval"]
+        e.capture_mode = c.ambi_mode = p["mode"]
+        e.sample_mode = c.ambi_sample = p["sample"]
+        if has_wf:
+            c.ambi_white_floor = p["white_floor"]
+            e.white_floor = float(p["white_floor"])
+        if has_xf:
+            e.crossfade = c.ambi_crossfade = p["crossfade"]
+        if has_dx:
+            want = p["dxcam"]
+            if want:
+                try:
+                    import dxcam  # noqa
+                except Exception:
+                    want = False
+                    self.log("Preset: dxcam not installed — GPU capture stays OFF.")
+            e.use_dxcam = c.ambi_use_dxcam = want
+        return True
+
+    # ── per-app launch rules ──
+    def _rule_exe(self, rule: dict) -> str:
+        exe = str(rule.get("exe", "")).strip().lower()
+        if exe and not exe.endswith(".exe"):
+            exe += ".exe"
+        return exe
+
+    def _check_app_rules(self):
+        rules = self.cfg.app_rules or []
+        if not rules:
+            self._rule_prev = set()
+            return
+        try:
+            running = app_rules.running_exes()
+        except Exception:
+            return
+        active = set()
+        for i, r in enumerate(rules):
+            if not r.get("enabled"):
+                continue
+            exe = self._rule_exe(r)
+            if exe and exe in running:
+                active.add(i)
+        prev = self._rule_prev
+        for i in active - prev:
+            self._fire_app_rule(i, rules[i])
+        for i in prev - active:
+            self._end_app_rule(i, rules[i], active)
+        self._rule_prev = active
+
+    def _fire_app_rule(self, idx: int, rule: dict):
+        exe = self._rule_exe(rule)
+        if self.ambilight.running:
+            self.log(f"Rule: {exe} is running — Ambilight already on.")
+            return
+        name = str(rule.get("preset") or "").strip()
+        if name:
+            if self.apply_ambi_preset(name):
+                self.log(f"Rule: applied preset '{name}' for {exe}.")
+            else:
+                self.log(f"Rule: preset '{name}' not found for {exe}.")
+        self.log(f"Rule: {exe} started — turning Ambilight on.")
+        self.ambi_start(owner=exe)
+
+    def _end_app_rule(self, idx: int, rule: dict, active_now: set):
+        if not rule.get("auto_stop"):
+            return
+        exe = self._rule_exe(rule)
+        if self._ambi_rule_owner != exe:
+            return
+        if active_now:  # another rule app is still running
+            return
+        if self.ambilight.running:
+            self.log(f"Rule: {exe} closed — turning Ambilight off.")
+            self.ambi_stop()
+
+    def app_rule_loop(self):
+        while not self._quitting:
+            try:
+                self._check_app_rules()
+            except Exception:
+                pass
+            for _ in range(20):
+                if self._quitting:
+                    break
+                time.sleep(0.1)
+
     def _set_window_visible(self, visible: bool) -> bool:
         """Show/hide the app window without touching WebView from a worker."""
         try:
@@ -470,7 +577,7 @@ class Backend:
             pass
         return False
 
-    def ambi_start(self) -> bool:
+    def ambi_start(self, owner=None) -> bool:
         try:
             import mss  # noqa
             from PIL import Image  # noqa
@@ -503,6 +610,7 @@ class Backend:
             return False
         self.log(f"Ambilight started @ {self.ambilight.fps:.0f}fps "
                  f"({self.ambilight.capture_mode}/{self.ambilight.sample_mode})")
+        self._ambi_rule_owner = owner
         try:
             self.push({"t": "ambi_state", "running": True})
         except Exception:
@@ -518,6 +626,7 @@ class Backend:
         except Exception:
             pass
         self.log("Ambilight stopped.")
+        self._ambi_rule_owner = None
         if self._hidden_for_sync:
             self._hidden_for_sync = False
             self._set_window_visible(True)
@@ -1339,6 +1448,59 @@ class Api:
         _B().log("Hide window while syncing " + ("ON." if on else "OFF."))
         return _B().get_state()
 
+    # ── per-app Ambilight rules ──
+    def list_apps(self):
+        try:
+            return app_rules.visible_window_exes()
+        except Exception:
+            return []
+
+    def app_rule_add(self, exe, preset="", auto_stop=True):
+        b = _B()
+        exe = str(exe or "").strip().lower().replace("\\", "/").split("/")[-1]
+        if exe and not exe.endswith(".exe"):
+            exe += ".exe"
+        if not exe:
+            return b.get_state()
+        if any(r.get("exe") == exe for r in (b.cfg.app_rules or [])):
+            b.log(f"Rule for {exe} already exists.")
+            return b.get_state()
+        b.cfg.app_rules.append({
+            "exe": exe[:80], "preset": str(preset or "")[:40],
+            "auto_stop": bool(auto_stop), "enabled": True,
+        })
+        b._save_keys({"app_rules": b.cfg.app_rules})
+        b._rule_prev = set()
+        b.log(f"Rule added: start Ambilight when {exe} runs"
+              + (f" (preset '{preset}')." if preset else " (current settings)."))
+        return b.get_state()
+
+    def app_rule_update(self, idx, patch):
+        b = _B()
+        try:
+            r = b.cfg.app_rules[int(idx)]
+            if "preset" in patch:
+                r["preset"] = str(patch["preset"] or "")[:40]
+            if "auto_stop" in patch:
+                r["auto_stop"] = bool(patch["auto_stop"])
+            if "enabled" in patch:
+                r["enabled"] = bool(patch["enabled"])
+            b._save_keys({"app_rules": b.cfg.app_rules})
+        except Exception:
+            pass
+        return b.get_state()
+
+    def app_rule_delete(self, idx):
+        b = _B()
+        try:
+            removed = b.cfg.app_rules.pop(int(idx))
+            b._save_keys({"app_rules": b.cfg.app_rules})
+            b._rule_prev = set()
+            b.log(f"Rule removed: {removed.get('exe', '?')}.")
+        except Exception:
+            pass
+        return b.get_state()
+
     def ambi_set(self, p):
         c = _B().cfg
         e = _B().ambilight
@@ -1364,39 +1526,8 @@ class Api:
         return _B().get_state()
 
     def ambi_preset(self, name):
-        from config import Config as _Cfg
-        p = AMBI_BUILTINS.get(name)
-        if p is None:
-            p = (_B().cfg.ambi_custom_presets or {}).get(name)
-        if not p:
+        if not _B().apply_ambi_preset(name):
             return _B().get_state()
-        has_xf = "crossfade" in p
-        has_dx = "dxcam" in p
-        has_wf = "white_floor" in p
-        p = _Cfg._clean_ambi_preset(dict(p))
-        c = _B().cfg
-        e = _B().ambilight
-        e.fps = c.ambi_fps = p["fps"]
-        e.smooth = c.ambi_smooth = p["smooth"]
-        e.brightness = c.ambi_brightness = p["brightness"]
-        e.min_delta = c.ambi_min_delta = p["min_delta"]
-        e.update_interval = c.ambi_interval = p["interval"]
-        e.capture_mode = c.ambi_mode = p["mode"]
-        e.sample_mode = c.ambi_sample = p["sample"]
-        if has_wf:
-            c.ambi_white_floor = p["white_floor"]
-            e.white_floor = float(p["white_floor"])
-        if has_xf:
-            e.crossfade = c.ambi_crossfade = p["crossfade"]
-        if has_dx:
-            want = p["dxcam"]
-            if want:
-                try:
-                    import dxcam  # noqa
-                except Exception:
-                    want = False
-                    _B().log("Preset: dxcam not installed — GPU capture stays OFF.")
-            e.use_dxcam = c.ambi_use_dxcam = want
         _B()._mark_dirty("ambi")
         _B().log(f"Ambilight preset '{name}' staged (unsaved).")
         return _B().get_state()
@@ -1631,7 +1762,7 @@ def main():
                         ok = True
                         break
                     time.sleep(0.5)
-                _selftest_write({
+                report = {
                     "stage": "finished",
                     "ok": ok,
                     "ui": getattr(back, "_ui_booted", None),
@@ -1639,7 +1770,13 @@ def main():
                     "webui": _webui_file("index.html"),
                     "private_mode": False,
                     "boot_seconds": round(time.monotonic() - t_start, 2),
-                })
+                }
+                try:
+                    import app_rules
+                    report["app_rules"] = len(app_rules.running_exes()) > 0
+                except Exception as e:
+                    report["app_rules_error"] = str(e)[:200]
+                _selftest_write(report)
             finally:
                 back.begin_quit(force=True)
         threading.Thread(target=_selftest, daemon=True).start()
@@ -1666,6 +1803,7 @@ def main():
                          daemon=True).start()
     threading.Thread(target=back.watchdog, daemon=True).start()
     threading.Thread(target=back.ambi_tick_loop, daemon=True).start()
+    threading.Thread(target=back.app_rule_loop, daemon=True).start()
     if back.dynlight.enabled:
         threading.Timer(6.0, lambda: back.dynlight.request_refresh()).start()
     if back.cfg.auto_connect and back.cfg.last_addresses:

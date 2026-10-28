@@ -116,6 +116,8 @@ class Config:
     ambi_crossfade: bool = True
     ambi_use_dxcam: bool = True  # GPU ~15ms full; mss ~50ms but no flicker on old Windows
     ambi_hide_window: bool = True  # hide the app while syncing so it never mirrors its own UI
+    # per-app launch rules: [{exe, preset, auto_stop, enabled}]
+    app_rules: list[dict] = field(default_factory=list)
     ambi_white_floor: int = 0  # 0..100 min saturation % to show color; duller scenes show white. 0 = off
 
     # Windows Dynamic Lighting mirror (experimental, off by default)
@@ -304,6 +306,16 @@ class Config:
         }
 
     @staticmethod
+    def _clean_app_rule(r: dict) -> dict:
+        exe = str(r.get("exe", "")).strip().lower().replace("\\", "/").split("/")[-1]
+        return {
+            "exe": exe[:80],
+            "preset": str(r.get("preset", ""))[:40],
+            "auto_stop": bool(r.get("auto_stop", True)),
+            "enabled": bool(r.get("enabled", True)),
+        }
+
+    @staticmethod
     def _clean_ambi_preset(p: dict) -> dict:
         """Clamp a user ambilight preset to valid ranges (same as built-ins)."""
         if not isinstance(p, dict):
@@ -399,6 +411,11 @@ class Config:
                     c.ambi_hide_window = bool(c.ambi_hide_window)
                 except Exception:
                     c.ambi_hide_window = True
+                try:
+                    c.app_rules = [cls._clean_app_rule(r) for r in (c.app_rules or [])
+                                   if isinstance(r, dict)]
+                except Exception:
+                    c.app_rules = []
                 try:
                     c.ambi_white_floor = max(0, min(100, int(c.ambi_white_floor)))
                 except Exception:
