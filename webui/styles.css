@@ -740,8 +740,8 @@ body.reduce *, body.reduce *::before, body.reduce *::after {
 /* nav glide rail */
 .nav { position: relative; }
 .nav-glide {
-  position: absolute; left: 2px; top: 0; width: 3px; height: 28px;
-  border-radius: 99px; opacity: 0;
+  position: absolute; left: 6px; top: 0; width: 3px; height: 28px;
+  border-radius: 99px; opacity: 0; z-index: 4;
   background: linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 55%, var(--cyan)));
   box-shadow: 0 0 12px color-mix(in srgb, var(--brand) 60%, transparent);
   transition: transform 380ms var(--spring), height 380ms var(--spring), opacity 220ms;

@@ -107,7 +107,7 @@ function positionNavGlide() {
   const btn = document.querySelector(".nav-item.active");
   if (!nav || !glide || !btn) return;
   glide.style.height = btn.offsetHeight + "px";
-  glide.style.transform = "translateY(" + btn.offsetTop + "px)";
+  glide.style.transform = "translateY(" + (nav.offsetTop + btn.offsetTop) + "px)";
   glide.style.opacity = "1";
   if (!glideReady) {
     glideReady = true;
@@ -142,6 +142,8 @@ document.addEventListener("pointerdown", (e) => {
   setTimeout(() => span.remove(), 620);
 }, { passive: true });
 window.addEventListener("resize", debounce(positionNavGlide, 160));
+const navEl = document.querySelector(".nav");
+if (navEl) navEl.addEventListener("scroll", positionNavGlide, { passive: true });
 
 /* ─────────────────────────── toast / modal ─────────────────────────── */
 function toast(msg, kind = "ok") {
