@@ -874,6 +874,26 @@ class Api:
             b.log(f"Disconnect: {e}")
         return True
 
+    def disconnect_one(self, addr):
+        b = _B()
+        b._manual_disc.add(addr)
+        b._boot_retries = 0
+
+        async def _do():
+            try:
+                await b.ble.disconnect(addr)
+                b.log(f"Disconnected {addr}")
+            except Exception:
+                pass
+
+        def _done(fut):
+            b._push_conn()
+        try:
+            b.runner.submit(_do()).add_done_callback(_done)
+        except Exception as e:
+            b.log(f"Disconnect: {e}")
+        return True
+
     def forget_remembered(self):
         b = _B()
         b.cfg.last_addresses.clear()

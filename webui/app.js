@@ -551,7 +551,66 @@ function initials(name) {
   const p = n.split(/\s+/);
   return ((p[0] || "?")[0] + (p[1] ? p[1][0] : (p[0] || "")[1] || "")).toUpperCase();
 }
+function deviceName(addr) {
+  const f = (S.found || []).find(d => d.addr === addr);
+  if (f && f.name) return f.name;
+  if (S.cfg && S.cfg.names && S.cfg.names[addr]) return S.cfg.names[addr];
+  return "Unknown strip";
+}
+function renderConnected() {
+  const box = $("connectedList");
+  if (!box) return;
+  const addrs = [...(S.connected || [])];
+  const badge = $("connBadge");
+  badge.textContent = addrs.length ? `${addrs.length} connected` : "None";
+  badge.className = "badge " + (addrs.length ? "ok" : "");
+  box.innerHTML = "";
+  if (!addrs.length) {
+    box.innerHTML = `<div class="empty"><b>Nothing connected</b>Scan below, or let auto-connect restore a remembered strip.</div>`;
+    return;
+  }
+  addrs.forEach((addr, idx) => {
+    const name = deviceName(addr);
+    const inGroup = (S.group_members || []).some(m => m.addr === addr);
+    const row = document.createElement("div");
+    row.className = "list-row";
+    row.style.setProperty("--i", Math.min(idx, 10));
+
+    const av = document.createElement("div");
+    av.className = "avatar"; av.textContent = initials(name);
+
+    const main = document.createElement("div");
+    main.className = "list-main";
+    main.innerHTML = `<div class="list-t"></div><div class="list-s"></div>`;
+    main.querySelector(".list-t").textContent = name;
+    main.querySelector(".list-s").textContent = addr;
+
+    const live = document.createElement("span");
+    live.className = "badge ok"; live.textContent = "Connected";
+
+    const grp = document.createElement("span");
+    grp.className = "badge " + (inGroup ? "brand" : "");
+    grp.textContent = inGroup ? "In group" : "Not in group";
+
+    const act = document.createElement("div");
+    act.className = "list-actions";
+    if (!inGroup) {
+      const add = document.createElement("button");
+      add.className = "btn sm primary"; add.textContent = "Add to group";
+      add.onclick = () => mut(api("group_add_many", [addr])).then(() => toast(`${name} added to group`));
+      act.appendChild(add);
+    }
+    const disc = document.createElement("button");
+    disc.className = "btn sm danger"; disc.textContent = "Disconnect";
+    disc.onclick = () => api("disconnect_one", addr).then(() => toast(`Disconnected ${name}`));
+    act.appendChild(disc);
+
+    row.append(av, main, live, grp, act);
+    box.appendChild(row);
+  });
+}
 function renderDevices() {
+  renderConnected();
   const box = $("foundList");
   const devs = S.found || [];
   $("scanStatus").textContent = devs.length ? `${devs.length} found` : "No devices yet";
