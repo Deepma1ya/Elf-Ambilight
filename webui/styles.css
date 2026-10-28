@@ -731,7 +731,147 @@ body.reduce *, body.reduce *::before, body.reduce *::after {
   animation-duration: .001ms !important; transition-duration: .001ms !important;
 }
 
-/* ---------- responsive ---------- */
+/* ---------- motion layer ---------- */
+:root {
+  --spring: cubic-bezier(.34, 1.45, .5, 1);
+  --spring-soft: cubic-bezier(.25, 1.2, .4, 1);
+}
+
+/* nav glide rail */
+.nav { position: relative; }
+.nav-glide {
+  position: absolute; left: 2px; top: 0; width: 3px; height: 28px;
+  border-radius: 99px; opacity: 0;
+  background: linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 55%, var(--cyan)));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--brand) 60%, transparent);
+  transition: transform 380ms var(--spring), height 380ms var(--spring), opacity 220ms;
+  pointer-events: none;
+}
+.nav-glide.no-anim { transition: none; }
+
+/* directional page transitions */
+.page.active { animation: none; }
+.page.active.enter-right { animation: pageInRight 430ms var(--ease) both; }
+.page.active.enter-left { animation: pageInLeft 430ms var(--ease) both; }
+
+/* page content stagger: cards and stats */
+.page.active .card { animation: rise 460ms var(--ease) backwards; }
+.page.active .stat { animation: rise 420ms var(--ease) backwards; }
+.page.active .stat:nth-child(1) { animation-delay: 20ms; }
+.page.active .stat:nth-child(2) { animation-delay: 60ms; }
+.page.active .stat:nth-child(3) { animation-delay: 100ms; }
+
+/* list row entrance */
+.page.active .list-row {
+  animation: rowIn 380ms var(--ease) backwards;
+  animation-delay: calc(var(--i, 0) * 26ms);
+}
+.page.active .mode-btn {
+  animation: rowIn 340ms var(--ease) backwards;
+  animation-delay: calc(var(--i, 0) * 16ms);
+}
+.page.active .theme-card { animation: rowIn 380ms var(--ease) backwards; }
+.page.active .theme-card:nth-child(2) { animation-delay: 50ms; }
+.page.active .theme-card:nth-child(3) { animation-delay: 100ms; }
+
+/* hover lift + spotlight */
+@media (hover: hover) {
+  .card { transform: translateY(0); transition: transform 260ms var(--spring-soft), box-shadow 260ms var(--ease), border-color 220ms; }
+  .card:hover { transform: translateY(-2px); }
+  .stat { transition: transform 240ms var(--spring-soft), box-shadow 240ms var(--ease), border-color 220ms; }
+  .stat:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .nav-item:hover { transform: translateX(2px); }
+  .nav-item { transition: background 130ms, color 130ms, border-color 130ms, transform 200ms var(--spring-soft); }
+  .mode-btn:hover .n, .list-row:hover .avatar { transform: scale(1.06); }
+  .mode-btn .n, .list-row .avatar { transition: transform 200ms var(--spring-soft); }
+}
+.card { position: relative; }
+.card::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  pointer-events: none; opacity: 0; z-index: 0;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%),
+              color-mix(in srgb, var(--brand) 9%, transparent), transparent 62%);
+  transition: opacity 320ms var(--ease);
+}
+.card:hover::after { opacity: 1; }
+.card > * { position: relative; z-index: 1; }
+
+/* buttons: ripple + spring press */
+.btn { position: relative; overflow: hidden; }
+.btn:active { transform: translateY(1px) scale(.985); }
+.ripple {
+  position: absolute; border-radius: 50%; pointer-events: none;
+  background: rgba(255, 255, 255, .35);
+  transform: scale(0); opacity: .7;
+  animation: ripple 560ms var(--ease) forwards;
+}
+.btn.ghost .ripple, .btn.sm.ghost .ripple { background: color-mix(in srgb, var(--brand) 22%, transparent); }
+.btn.danger .ripple { background: rgba(255, 255, 255, .3); }
+
+/* springier switches */
+.switch::after { transition: transform 300ms var(--spring), background 220ms; }
+.switch[aria-checked="true"]::after { transform: translateX(15px); }
+
+/* nav icon micro-motion */
+.nav-item svg { transition: transform 240ms var(--spring-soft), color 130ms; }
+.nav-item:hover svg { transform: translateY(-1px); }
+.nav-item.active svg { transform: none; }
+
+/* modal + palette spring */
+.modal { animation: modalIn 320ms var(--spring-soft); }
+.scrim.on { animation: fade 180ms var(--ease); }
+.cmdk-panel { animation: modalIn 300ms var(--spring-soft); }
+.cmdk-item { animation: rowIn 260ms var(--ease) backwards; animation-delay: calc(var(--i, 0) * 18ms); }
+
+/* toast with timer bar */
+.toast { position: relative; overflow: hidden; }
+.toast::after {
+  content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%;
+  background: currentColor; opacity: .22; transform-origin: left;
+  animation: toastBar 2300ms linear forwards;
+}
+
+/* live dots breathe */
+.status-chip.ok .dot { animation: breathe 2.6s ease-in-out infinite; }
+
+/* ambient drifting light */
+.shell::after {
+  content: ""; position: fixed; inset: -18%; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(620px 420px at 18% 28%, color-mix(in srgb, var(--brand) 9%, transparent), transparent 62%),
+    radial-gradient(720px 520px at 82% 72%, color-mix(in srgb, var(--cyan) 8%, transparent), transparent 64%);
+  animation: drift 28s ease-in-out infinite alternate;
+  will-change: transform;
+}
+[data-theme="dark"] .shell::after { opacity: .55; }
+
+/* boot progress bar */
+#bootBar {
+  position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 120;
+  overflow: hidden; pointer-events: none; transition: opacity 400ms var(--ease);
+}
+#bootBar i {
+  display: block; height: 100%; width: 38%;
+  background: linear-gradient(90deg, transparent, var(--brand), var(--cyan), transparent);
+  animation: bootSlide 1200ms ease-in-out infinite;
+}
+#bootBar.done { opacity: 0; }
+
+/* keyframes */
+@keyframes pageInRight { from { opacity: 0; transform: translateX(18px) scale(.995); } to { opacity: 1; transform: none; } }
+@keyframes pageInLeft { from { opacity: 0; transform: translateX(-18px) scale(.995); } to { opacity: 1; transform: none; } }
+@keyframes rowIn { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+@keyframes modalIn { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes ripple { to { transform: scale(1); opacity: 0; } }
+@keyframes toastBar { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes breathe { 0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); } 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--ok) 6%, transparent); } }
+@keyframes drift { from { transform: translate3d(-2%, -1%, 0) scale(1); } to { transform: translate3d(2%, 1.5%, 0) scale(1.05); } }
+@keyframes bootSlide { from { transform: translateX(-120%); } to { transform: translateX(340%); } }
+
+/* motion opt-out */
+body.reduce .nav-glide { transition: none; }
+body.reduce .card::after { display: none; }
+
 @media (max-width: 1000px) {
   :root { --sidebar: 70px; }
   .brand-text, .nav-label, .nav-item span, .nav-item .badge-mini, .mini-card, .sidebar-version { display: none; }

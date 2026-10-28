@@ -78,6 +78,71 @@ function paintRange(el) {
 }
 function paintAll(root = document) { root.querySelectorAll('input[type="range"]').forEach(paintRange); }
 
+/* ─────────────────────────── motion ─────────────────────────── */
+function prefersReduced() {
+  try {
+    return document.body.classList.contains("reduce") ||
+      (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  } catch (e) { return false; }
+}
+function animateNumber(el, to) {
+  if (!el) return;
+  const from = Number(el.dataset.v ?? to);
+  el.dataset.v = String(to);
+  if (from === to || prefersReduced()) { el.textContent = String(to); return; }
+  const t0 = performance.now();
+  const delta = to - from;
+  const step = (t) => {
+    const p = Math.min(1, (t - t0) / 460);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.textContent = String(Math.round(from + delta * e));
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+let glideReady = false;
+function positionNavGlide() {
+  const nav = document.querySelector(".nav");
+  const glide = $("navGlide");
+  const btn = document.querySelector(".nav-item.active");
+  if (!nav || !glide || !btn) return;
+  glide.style.height = btn.offsetHeight + "px";
+  glide.style.transform = "translateY(" + btn.offsetTop + "px)";
+  glide.style.opacity = "1";
+  if (!glideReady) {
+    glideReady = true;
+    requestAnimationFrame(() => glide.classList.remove("no-anim"));
+  }
+}
+let spotRaf = 0;
+document.addEventListener("pointermove", (e) => {
+  if ((e.pointerType && e.pointerType !== "mouse") || prefersReduced()) return;
+  const card = e.target && e.target.closest ? e.target.closest(".card") : null;
+  if (!card || spotRaf) return;
+  const x = e.clientX, y = e.clientY;
+  spotRaf = requestAnimationFrame(() => {
+    const r = card.getBoundingClientRect();
+    card.style.setProperty("--mx", (x - r.left) + "px");
+    card.style.setProperty("--my", (y - r.top) + "px");
+    spotRaf = 0;
+  });
+}, { passive: true });
+document.addEventListener("pointerdown", (e) => {
+  if (prefersReduced()) return;
+  const btn = e.target && e.target.closest ? e.target.closest(".btn") : null;
+  if (!btn) return;
+  const r = btn.getBoundingClientRect();
+  const size = Math.max(r.width, r.height) * 2;
+  const span = document.createElement("span");
+  span.className = "ripple";
+  span.style.width = span.style.height = size + "px";
+  span.style.left = (e.clientX - r.left - size / 2) + "px";
+  span.style.top = (e.clientY - r.top - size / 2) + "px";
+  btn.appendChild(span);
+  setTimeout(() => span.remove(), 620);
+}, { passive: true });
+window.addEventListener("resize", debounce(positionNavGlide, 160));
+
 /* ─────────────────────────── toast / modal ─────────────────────────── */
 function toast(msg, kind = "ok") {
   const el = document.createElement("div");
@@ -259,7 +324,7 @@ function renderAll() {
 function renderChrome() {
   const n = (S.connected || []).length;
   $("sideConn").textContent = n;
-  $("statConn").textContent = n;
+  animateNumber($("statConn"), n);
   $("navDevBadge").textContent = n;
   $("chipConnText").textContent = `${n} connected`;
   $("chipConn").className = "status-chip " + (n ? "ok" : "");
@@ -300,12 +365,21 @@ async function showPage(next) {
     if (!r || r === "cancel") return;
     if (r === "save") await doSave(); else await doDiscard();
   }
+  const prevIdx = PAGES.indexOf(page);
   page = next;
   document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.id === "pg-" + next));
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.page === next));
   $("crumbTitle").textContent = TITLES[next];
+  const el = $("pg-" + next);
+  if (el) {
+    el.classList.remove("enter-left", "enter-right");
+    void el.offsetWidth;
+    const idx = PAGES.indexOf(next);
+    el.classList.add(prevIdx >= 0 && idx < prevIdx ? "enter-left" : "enter-right");
+  }
   $("scroll").scrollTop = 0;
   if (stale.has(next)) renderPage(next);
+  positionNavGlide();
 }
 
 /* ─────────────────────────── color model ─────────────────────────── */
@@ -485,9 +559,10 @@ function renderDevices() {
   if (!devs.length) {
     box.innerHTML = `<div class="empty"><b>Nothing discovered yet</b>Press Scan to look for nearby strips.</div>`;
   } else {
-    devs.forEach(d => {
+    devs.forEach((d, di) => {
       const row = document.createElement("div");
       row.className = "list-row";
+      row.style.setProperty("--i", Math.min(di, 10));
       const cb = document.createElement("label");
       cb.className = "check";
       const inp = document.createElement("input");
@@ -529,9 +604,10 @@ function renderDevices() {
   ml.innerHTML = "";
   const members = S.group_members || [];
   if (!members.length) ml.innerHTML = `<div class="empty"><b>Empty group</b>Add a discovered device to start controlling it.</div>`;
-  members.forEach(m => {
+  members.forEach((m, mi) => {
     const row = document.createElement("div");
     row.className = "list-row";
+    row.style.setProperty("--i", Math.min(mi, 10));
     const av = document.createElement("div");
     av.className = "avatar"; av.textContent = initials(m.name);
     const main = document.createElement("div");
@@ -756,6 +832,7 @@ function renderModes() {
     shown++;
     const b = document.createElement("button");
     b.className = "mode-btn" + (i === S.cfg.last_mode ? " on" : "");
+    b.style.setProperty("--i", Math.min(shown, 10));
     b.innerHTML = `<span class="n">${String(i).padStart(2, "0")}</span><span></span>`;
     b.querySelector("span:last-child").textContent = m;
     b.dataset.i = i;
@@ -843,6 +920,7 @@ function renderTiming() {
   sch.forEach((s, idx) => {
     const row = document.createElement("div");
     row.className = "list-row"; row.style.flexWrap = "wrap";
+    row.style.setProperty("--i", Math.min(idx, 8));
     const name = document.createElement("input");
     name.type = "text"; name.value = s.name; name.style.width = "132px";
     name.onchange = () => mut(api("sched_set", idx, "name", name.value));
@@ -1057,6 +1135,7 @@ function renderCmdk(q) {
     b.onmouseenter = () => { cmdSel = i; markCmdk(list); };
     b.onclick = () => { closeCmdk(); a.run(); };
     b.dataset.idx = i;
+    b.style.setProperty("--i", Math.min(i, 10));
     list.appendChild(b);
   });
   list._filtered = filtered;
@@ -1402,6 +1481,9 @@ async function boot() {
     renderAll();          // one-time full render; interactions stay page-scoped
     page = "";
     showPage("devices");
+    positionNavGlide();
+    const bb = $("bootBar");
+    if (bb) { bb.classList.add("done"); setTimeout(() => bb.remove(), 500); }
     pushLog("UI ready.");
     pollOnce();
     api("ui_booted", {

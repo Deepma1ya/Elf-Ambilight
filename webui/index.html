@@ -8,6 +8,8 @@
 </head>
 <body>
 
+<div id="bootBar"><i></i></div>
+
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l2.2 5.6L20 11l-5.8 2.4L12 19l-2.2-5.6L4 11l5.8-2.4L12 3z" fill="currentColor"/></symbol>
@@ -56,6 +58,7 @@
     </div>
 
     <nav class="nav" aria-label="Sections">
+      <span class="nav-glide no-anim" id="navGlide"></span>
       <div class="nav-group">
         <div class="nav-label">Control</div>
         <button class="nav-item" data-page="devices" title="Devices" aria-label="Devices"><svg><use href="#i-devices"/></svg><span>Devices</span><span class="badge-mini" id="navDevBadge">0</span></button>
