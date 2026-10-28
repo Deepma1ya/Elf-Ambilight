@@ -32,7 +32,8 @@ import app_rules
 import media_player
 from startup_helper import (startup_enabled, set_startup, task_enabled,
                             is_elevated, relaunch_elevated_task,
-                            enable_high_priority)
+                            enable_high_priority, read_task_result,
+                            clear_task_result, invalidate_task_cache)
 
 COLOR_PRESETS = [
     (255, 255, 255), (255, 250, 250), (255, 255, 240), (255, 253, 208),
@@ -131,6 +132,7 @@ class Backend:
         self._hidden_for_sync = False
         self._ambi_rule_owner = None
         self._rule_prev: set[int] = set()
+        self._task_pending = None
         self.media = None
         from collections import deque
         self._events = deque()
@@ -241,6 +243,7 @@ class Backend:
                                 "connected": self.ble.is_connected(a)})
         except Exception:
             pass
+        task = bool(task_enabled())
         return {
             "ver": APP_VERSION,
             "cfg": asdict(self.cfg),
@@ -252,8 +255,9 @@ class Backend:
             "selected_group": self.cfg.selected_group,
             "group_members": members,
             "remembered_text": self._remembered_text(),
-            "startup_on": bool(startup_enabled() or task_enabled()),
-            "task_on": bool(task_enabled()),
+            "startup_on": bool(startup_enabled() or task),
+            "task_on": task,
+            "task_pending": self._task_pending,
             "bt_state": self._bt_state,
             "dyn_lamps": int(getattr(self.dynlight, "lamp_count", 0) or 0),
             "dyn_on": bool(self.cfg.dynlight_enabled),
@@ -1698,12 +1702,55 @@ class Api:
         return _B().get_state()
 
     # ── setup ──
+    def _task_wait_done(self, want, timeout=45.0):
+        """Poll (forcing a real schtasks query) until the elevated helper's
+        change is visible, then push an accurate state to the UI.
+
+        The old code reused the 5-minute cache here, so a successful task
+        creation was never seen and the switch stayed off."""
+        b = _B()
+        deadline = time.monotonic() + timeout
+        while not b._quitting and time.monotonic() < deadline:
+            res = read_task_result()
+            if res and res.get("on") == want and not res.get("ok"):
+                b._task_pending = None
+                task_enabled(force=True)
+                b.log(f"High priority startup: {res.get('error') or 'admin helper failed'}")
+                try:
+                    b.push({"t": "state", "state": b.get_state()})
+                except Exception:
+                    pass
+                return
+            try:
+                if task_enabled(force=True) == want:
+                    b._task_pending = None
+                    b.log("High priority startup " + (
+                        "ON (task only — normal entry removed)." if want
+                        else "OFF (normal startup restored)."))
+                    try:
+                        b.push({"t": "state", "state": b.get_state()})
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+            time.sleep(1.5)
+        b._task_pending = None
+        task_enabled(force=True)
+        b.log("High priority startup did not change — check the Windows prompt "
+              "or Task Scheduler.")
+        try:
+            b.push({"t": "state", "state": b.get_state()})
+        except Exception:
+            pass
+
     def set_startup(self, on):
         on = bool(on)
         b = _B()
         try:
+            task = task_enabled(force=True)
             if on:
-                if task_enabled():
+                if task:
                     set_startup(False)
                     b.log("Start with Windows ON (high priority task).")
                 else:
@@ -1711,57 +1758,64 @@ class Api:
                     b.log("Start with Windows ON (normal).")
             else:
                 set_startup(False)
-                if task_enabled():
+                if task:
                     if is_elevated():
-                        from startup_helper import set_task
-                        set_task(False)
+                        from startup_helper import set_task as _st
+                        _st(False)
+                        invalidate_task_cache()
                     else:
-                        relaunch_elevated_task(False)
+                        clear_task_result()
+                        relaunch_elevated_task(False, restore_normal=False)
                         b.log("Waiting for admin approval ...")
-                        threading.Timer(4.0, lambda: b.push(
-                            {"t": "state", "state": b.get_state()})).start()
+                        threading.Thread(target=self._startup_off_state,
+                                         daemon=True).start()
                 b.log("Start with Windows OFF (all auto-start removed).")
         except Exception as e:
             b.log(f"Startup: {e}")
         return b.get_state()
 
+    def _startup_off_state(self, tries=20):
+        b = _B()
+        for _ in range(tries):
+            if not task_enabled(force=True):
+                break
+            time.sleep(1.5)
+        try:
+            b.push({"t": "state", "state": b.get_state()})
+        except Exception:
+            pass
+
     def set_task(self, on):
         want = bool(on)
         b = _B()
-        if not want and not task_enabled():
-            pass
-        elif want and not (startup_enabled() or task_enabled()):
+        have = bool(task_enabled(force=True))
+        if want == have:
+            if want and startup_enabled():
+                set_startup(False)  # never leave two logon launchers
+                b.log("Removed the duplicate normal startup entry.")
+            b._task_pending = None
+            return b.get_state()
+        if want and not (startup_enabled() or have):
             b.log("Turn on 'Start app with Windows' first.")
             return b.get_state()
+        b._task_pending = want
         try:
             if is_elevated():
                 enable_high_priority(want, minimized=b.cfg.start_minimized)
+                task_enabled(force=True)
+                b._task_pending = None
                 b.log("High priority startup " + (
-                    "ON (task only — normal entry removed)."
-                    if want else "OFF (normal startup restored)."))
+                    "ON (task only — normal entry removed)." if want
+                    else "OFF (normal startup restored)."))
             else:
-                relaunch_elevated_task(want)
-                b.log("Waiting for admin approval ...")
-                def _poll_left(tries=4):
-                    if tries <= 0 or b._quitting:
-                        try:
-                            b.push({"t": "state", "state": b.get_state()})
-                        except Exception:
-                            pass
-                        return
-                    try:
-                        if task_enabled() == want:
-                            try:
-                                b.push({"t": "state", "state": b.get_state()})
-                            except Exception:
-                                pass
-                            b.log("High priority startup " + ("ON." if want else "OFF."))
-                            return
-                    except Exception:
-                        pass
-                    threading.Timer(2.0, _poll_left, args=(tries - 1,)).start()
-                threading.Timer(4.0, _poll_left).start()
+                clear_task_result()
+                relaunch_elevated_task(want, restore_normal=want)
+                b.log("Waiting for admin approval — confirm the Windows prompt ...")
+                threading.Thread(target=self._task_wait_done, args=(want,),
+                                 daemon=True).start()
         except Exception as e:
+            b._task_pending = None
+            task_enabled(force=True)
             b.log(f"High priority startup: {e}")
         return b.get_state()
 
@@ -1831,11 +1885,23 @@ def main():
         except Exception:
             print("usage: --task on|off")
             return
+        from startup_helper import set_task as _set_task, write_task_result
+        no_restore = "--no-restore" in sys.argv
+        result = {"on": on, "ok": False, "error": "", "elevated": is_elevated()}
         try:
-            enable_high_priority(on, minimized=bool(Config.load().start_minimized))
+            minimized = bool(Config.load().start_minimized)
+            if on:
+                enable_high_priority(True, minimized=minimized)
+            else:
+                _set_task(False)
+                if not no_restore:
+                    set_startup(True, minimized=minimized)
+            result["ok"] = True
             print(f"high priority {'ON' if on else 'OFF'}")
         except Exception as e:
+            result["error"] = str(e)
             print(f"task setup failed: {e}")
+        write_task_result(result)
         return
     if "--allow-multi" not in sys.argv:
         try:
@@ -1912,6 +1978,13 @@ def main():
                     report["ffmpeg"] = bool(media_player.ffmpeg_path())
                 except Exception as e:
                     report["media_error"] = str(e)[:200]
+                try:
+                    from startup_helper import task_enabled, startup_enabled, is_elevated
+                    report["task_on"] = bool(task_enabled(force=True))
+                    report["startup_run"] = bool(startup_enabled())
+                    report["elevated"] = bool(is_elevated())
+                except Exception as e:
+                    report["startup_error"] = str(e)[:200]
                 _selftest_write(report)
             finally:
                 back.begin_quit(force=True)

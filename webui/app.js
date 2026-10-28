@@ -1268,10 +1268,22 @@ const ambiChanged = debounce(() => {
 /* ─────────────────────────── settings ─────────────────────────── */
 function renderSettings() {
   const c = S.cfg;
+  const pend = S.task_pending;
+  const taskPending = pend === true || pend === false;
   setSwitch($("stStartup"), !!S.startup_on);
-  setSwitch($("stTask"), !!S.task_on);
-  $("stTask").disabled = !S.startup_on;
-  $("stTask").style.opacity = S.startup_on ? "" : ".45";
+  setSwitch($("stTask"), taskPending ? pend : !!S.task_on);
+  $("stTask").disabled = taskPending || !S.startup_on;
+  $("stTask").style.opacity = (taskPending || !S.startup_on) ? ".55" : "";
+  const taskHint = $("stTaskHint");
+  if (taskHint) {
+    taskHint.textContent = taskPending
+      ? "Waiting for Windows approval…"
+      : S.task_on
+        ? "On — runs elevated at logon (normal entry removed)."
+        : S.startup_on
+          ? "Elevated task, replaces the normal entry."
+          : "Turn on Start with Windows first.";
+  }
   setSwitch($("stMinimized"), !!c.start_minimized);
   setSwitch($("stBtAuto"), !!c.bt_on_startup);
   setSwitch($("stDyn"), !!c.dynlight_enabled);
@@ -1705,7 +1717,13 @@ function bind() {
 
   // settings
   bindSwitch($("stStartup"), on => api("set_startup", on).then(st => st && st.cfg && applyState(st)));
-  bindSwitch($("stTask"), on => api("set_task", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stTask"), on => api("set_task", on).then(st => {
+    if (st && st.cfg) applyState(st);
+    if (st && !st.task_pending && !!st.task_on !== on) {
+      toast(on ? "High priority startup needs admin approval"
+               : "Could not disable high priority startup", "err");
+    }
+  }));
   bindSwitch($("stMinimized"), on => api("set_pref", "start_minimized", on).then(st => st && st.cfg && applyState(st)));
   bindSwitch($("stBtAuto"), on => api("set_pref", "bt_on_startup", on).then(st => st && st.cfg && applyState(st)));
   bindSwitch($("stDyn"), on => api("set_dyn", on).then(st => st && st.cfg && applyState(st)));
