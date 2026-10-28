@@ -12,7 +12,7 @@ Modern Windows control for BLE LED strips — colors, effects, schedules, and re
 - **Effects** — 29 built-in strip effects with searchable categories, brightness and speed control.
 - **Command palette** — `Ctrl+K` to jump to any page, run actions, or apply presets; `Ctrl+S` saves, `Alt+1–7` switches pages.
 - **Schedule** — on-board strip timers plus PC-side schedules (power, color, mode).
-- **Ambilight** — screen-sync lighting with center/full capture, average/dominant/vibrant/brightest sampling, exact-duration crossfade (0–10 s), built-in and custom presets, and an idle eco mode. Capture runs at 5 Hz in a background thread with a capture-free fade loop, so Windows stays smooth while it runs.
+- **Ambilight** — screen-sync lighting with center/full capture, average/dominant/vibrant/brightest sampling, exact-duration crossfade (0–10 s), built-in and custom presets, and an idle eco mode. The window hides while syncing so the strip never mirrors its own UI (toggle in Capture). Capture runs at 5 Hz in a background thread with a capture-free fade loop, so Windows stays smooth while it runs.
 - **Settings** — launch at startup, Bluetooth helpers, system-tray behavior, and a Light / Dark / System theme switch.
 - **Windows Dynamic Lighting (experimental)** — mirror the strip color to PC gear (motherboard / RAM / keyboard / mouse) via the LampArray API. Enable in Setup. One app drives each lamp, so yield lighting in vendor apps first (e.g. G Hub: enable its Windows Dynamic Lighting support) — no need to close them.
 

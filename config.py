@@ -115,6 +115,7 @@ class Config:
     ambi_interval: float = 0.12  # a touch longer than 0.1 — fewer target updates
     ambi_crossfade: bool = True
     ambi_use_dxcam: bool = True  # GPU ~15ms full; mss ~50ms but no flicker on old Windows
+    ambi_hide_window: bool = True  # hide the app while syncing so it never mirrors its own UI
     ambi_white_floor: int = 0  # 0..100 min saturation % to show color; duller scenes show white. 0 = off
 
     # Windows Dynamic Lighting mirror (experimental, off by default)
@@ -394,6 +395,10 @@ class Config:
                     c.ambi_use_dxcam = bool(c.ambi_use_dxcam)
                 except Exception:
                     c.ambi_use_dxcam = True
+                try:
+                    c.ambi_hide_window = bool(c.ambi_hide_window)
+                except Exception:
+                    c.ambi_hide_window = True
                 try:
                     c.ambi_white_floor = max(0, min(100, int(c.ambi_white_floor)))
                 except Exception:

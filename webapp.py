@@ -126,6 +126,7 @@ class Backend:
         self.dynlight.enabled = bool(self.cfg.dynlight_enabled)
         self.ambilight.dynlight = self.dynlight
         self._tray = None
+        self._hidden_for_sync = False
         from collections import deque
         self._events = deque()
         self._monitors_cache = None
@@ -444,6 +445,31 @@ class Backend:
             self._send_pkt(pkt_mode(m), f"sched '{name}' mode {m}")
 
     # ── ambilight lifecycle ──
+    def _set_window_visible(self, visible: bool) -> bool:
+        """Show/hide the app window without touching WebView from a worker."""
+        try:
+            w = self.window
+            if w is not None:
+                if visible:
+                    w.show()
+                else:
+                    w.hide()
+                return True
+        except Exception:
+            pass
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.FindWindowW(
+                None, f"{APP_NAME} v{APP_VERSION}")
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 5 if visible else 0)
+                if visible:
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                return True
+        except Exception:
+            pass
+        return False
+
     def ambi_start(self) -> bool:
         try:
             import mss  # noqa
@@ -454,6 +480,21 @@ class Backend:
         if not self._targets():
             self.log("No device connected.")
             return False
+        # Hide our own window first: otherwise the capture region is the app
+        # UI and the strip mirrors its own colours.
+        if self.cfg.ambi_hide_window and not self._hidden_for_sync:
+            self._hidden_for_sync = True
+            if not self._set_window_visible(False):
+                self._hidden_for_sync = False
+                self.log("Could not hide the window — Ambilight may mirror its own UI.")
+            time.sleep(0.2)  # let the compositor remove the window
+            try:
+                if self._tray is not None:
+                    self._tray.notify(
+                        "Ambilight is running. Restore the window from this tray icon.",
+                        APP_NAME)
+            except Exception:
+                pass
         try:
             fut = self.runner.submit(self._ambi_begin_async())
             fut.result(timeout=10)
@@ -477,6 +518,9 @@ class Backend:
         except Exception:
             pass
         self.log("Ambilight stopped.")
+        if self._hidden_for_sync:
+            self._hidden_for_sync = False
+            self._set_window_visible(True)
         try:
             self.push({"t": "ambi_state", "running": False})
         except Exception:
@@ -533,6 +577,7 @@ class Backend:
                 img = img.convert("RGBA")
             menu = pystray.Menu(
                 pystray.MenuItem("Show", self._tray_show, default=True),
+                pystray.MenuItem("Stop Ambilight", self._tray_stop_ambi),
                 pystray.MenuItem("Quit", self._tray_quit),
             )
             self._tray = pystray.Icon("Elf-Ambilight", img,
@@ -573,9 +618,18 @@ class Backend:
                 w.show()
         except Exception:
             pass
+        if self._hidden_for_sync:
+            self._hidden_for_sync = False
+            self.log("Window restored — Ambilight now includes the app window in its capture.")
 
     def _tray_quit(self, *a):
         self.begin_quit(force=True)
+
+    def _tray_stop_ambi(self, *a):
+        try:
+            self.ambi_stop()
+        except Exception:
+            pass
 
     def begin_quit(self, force=False):
         self._quitting = True
@@ -1236,6 +1290,12 @@ class Api:
         _B().cfg.ambi_on_startup = bool(on)
         _B()._save_keys({"ambi_on_startup": _B().cfg.ambi_on_startup})
         _B().log("Ambilight at startup " + ("ON." if on else "OFF."))
+        return _B().get_state()
+
+    def set_ambi_hide(self, on):
+        _B().cfg.ambi_hide_window = bool(on)
+        _B()._save_keys({"ambi_hide_window": bool(on)})
+        _B().log("Hide window while syncing " + ("ON." if on else "OFF."))
         return _B().get_state()
 
     def ambi_set(self, p):

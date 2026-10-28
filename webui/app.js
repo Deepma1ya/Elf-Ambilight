@@ -966,6 +966,7 @@ function renderAmbi() {
   setSwitch($("ambiAuto"), !!a.ambi_on_startup);
   setSwitch($("ambiXf"), !!a.ambi_crossfade);
   setSwitch($("ambiDx"), !!a.ambi_use_dxcam);
+  setSwitch($("ambiHide"), !!a.ambi_hide_window);
   setSwitch($("ambiWfOn"), (+a.ambi_white_floor || 0) > 0);
 
   ambiMode = a.ambi_mode === "full" ? "full" : "center";
@@ -1399,6 +1400,7 @@ function bind() {
   bindSwitch($("ambiAuto"), on => mut(api("ambi_auto", on)));
   bindSwitch($("ambiXf"), () => ambiChanged());
   bindSwitch($("ambiDx"), () => ambiChanged());
+  bindSwitch($("ambiHide"), on => api("set_ambi_hide", on).then(st => st && st.cfg && applyState(st)));
   bindSwitch($("ambiWfOn"), on => {
     $("aWf").value = on ? Math.max(20, +$("aWf").value || 40) : 0;
     ambiLabels(); paintRange($("aWf")); ambiChanged();

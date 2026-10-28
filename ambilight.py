@@ -114,11 +114,26 @@ class Ambilight:
         # fresh sampler state so the first fade converges immediately
         self._dom_ema_init = False
         self._last_bri = self.brightness
-        self._sampled_target = tuple(self.last_color)  # type: ignore
+        self._sampled_target = (0, 0, 0)
         self._still = 0
         self._prev_thumb = None
         self.eco = False
         self._sampler_stop.clear()
+        # One real sample before the fade loop starts: the strip begins at the
+        # screen colour, never at the app's own last UI colour.
+        try:
+            from PIL import Image
+            sct = self._thread_sct()
+            box, _mon, _dx = self._capture_box(sct)
+            shot = sct.grab(box)
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            stats = self._analyze_small(img)
+            self.last_stats = stats
+            first = stats.get(self.sample_mode, stats["average"])
+            self.last_color = first
+            self._sampled_target = first
+        except Exception:
+            pass
         th = self._sampler_thread
         if th is None or not th.is_alive():
             self._sampler_thread = threading.Thread(
