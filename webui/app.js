@@ -1,33 +1,32 @@
 /* ==========================================================================
-   Elf-Ambilight — Aurora SaaS frontend
-   Talks to the Python backend through pywebview's js_api.
-   Events are drained by polling api("poll") every 450 ms.
+   Elf-Ambilight — Aurora SaaS frontend v2
+   Backend bridge: pywebview js_api. Events: poll every 450 ms.
    ========================================================================== */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const api = (...a) => window.pywebview.api[a[0]](...a.slice(1));
 
-let S = null;               // backend state
+let S = null;
 let dirty = false;
 let page = "devices";
 let booted = false;
-let checked = new Set();    // discovered-device selection
+let checked = new Set();
 let logs = [];
 let chan = "ALL";
 let ambiMode = "center";
 let color = { r: 255, g: 255, b: 255 };
-let theme = localStorage.getItem("elf.theme") || "light";
+let theme = "light";
+let modeFilter = "";
+let modeCat = "All";
 
 const PAGES = ["devices", "color", "tune", "modes", "timing", "ambi", "settings"];
-const TITLES = {
-  devices: "Devices", color: "Colors", tune: "Calibration",
-  modes: "Effects", timing: "Schedule", ambi: "Ambilight", settings: "Settings"
-};
+const TITLES = { devices: "Devices", color: "Colors", tune: "Calibration", modes: "Effects", timing: "Schedule", ambi: "Ambilight", settings: "Settings" };
 const DAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const AMBI_PRESETS = ["Movie", "Game", "Balanced", "Chill", "Party"];
+const WHEEL = 248;
 
-/* ────────────────────────────── utils ────────────────────────────── */
+/* ─────────────────────────── utils ─────────────────────────── */
 const hx = (r, g, b) => "#" + [r, g, b].map(v =>
   Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("").toUpperCase();
 
@@ -47,8 +46,23 @@ function rgb2hsl(r, g, b) {
   return [h, s * 100, l * 100];
 }
 function hsl2rgb(h, s, l) {
-  h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(100, s)) / 100; l = Math.max(0, Math.min(100, l)) / 100;
-  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+  h = ((h % 360) + 360) % 360;
+  s = Math.max(0, Math.min(100, s)) / 100;
+  l = Math.max(0, Math.min(100, l)) / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+function hsv2rgb(h, s, v) {
+  h = ((h % 360) + 360) % 360;
+  const c = v * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = v - c;
   let r = 0, g = 0, b = 0;
   if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; }
   else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; }
@@ -56,32 +70,29 @@ function hsl2rgb(h, s, l) {
   return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
 }
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function paintRange(el) {
   if (!el) return;
   const min = +el.min || 0, max = +el.max || 100, v = +el.value;
-  const p = ((v - min) / (max - min)) * 100;
-  el.style.setProperty("--p", p + "%");
+  el.style.setProperty("--p", (((v - min) / (max - min)) * 100) + "%");
 }
-function paintAll(root = document) {
-  root.querySelectorAll('input[type="range"]').forEach(paintRange);
-}
+function paintAll(root = document) { root.querySelectorAll('input[type="range"]').forEach(paintRange); }
 
-/* ────────────────────────────── toast ────────────────────────────── */
+/* ─────────────────────────── toast / modal ─────────────────────────── */
 function toast(msg, kind = "ok") {
   const el = document.createElement("div");
   el.className = "toast" + (kind === "err" ? " err" : "");
   el.innerHTML = `<svg><use href="#${kind === "err" ? "i-x" : "i-check"}"/></svg><span></span>`;
   el.querySelector("span").textContent = msg;
   $("toasts").appendChild(el);
-  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 220); }, 2400);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 220); }, 2300);
 }
 
-/* ────────────────────────────── modal ────────────────────────────── */
 let modalCancel = null;
 function openModal({ title, text = "", input = false, initial = "", buttons, onCancel }) {
   $("mTitle").textContent = title;
-  $("mText").textContent = text;
+  $("mText").textContent = text || "";
   $("mText").style.display = text ? "" : "none";
   const inp = $("mInput");
   inp.style.display = input ? "" : "none";
@@ -93,12 +104,7 @@ function openModal({ title, text = "", input = false, initial = "", buttons, onC
     const el = document.createElement("button");
     el.className = "btn sm " + (b.cls || "");
     el.textContent = b.label;
-    el.onclick = () => {
-      const v = input ? inp.value.trim() : true;
-      modalCancel = null;
-      close();
-      b.fn && b.fn(v);
-    };
+    el.onclick = () => { const v = input ? inp.value.trim() : true; modalCancel = null; close(); b.fn && b.fn(v); };
     box.appendChild(el);
   });
   modalCancel = onCancel || null;
@@ -107,8 +113,7 @@ function openModal({ title, text = "", input = false, initial = "", buttons, onC
 }
 function dismissModal() {
   if (!$("modalWrap").classList.contains("on")) return;
-  const f = modalCancel;
-  modalCancel = null;
+  const f = modalCancel; modalCancel = null;
   $("modalWrap").classList.remove("on");
   if (f) f();
 }
@@ -116,70 +121,67 @@ const askName = (title, initial) => new Promise(res => {
   openModal({
     title, text: "Give it a short, memorable name.", input: true, initial,
     onCancel: () => res(null),
-    buttons: [
-      { label: "Cancel", cls: "ghost", fn: () => res(null) },
-      { label: "Save", cls: "primary", fn: v => res(v || null) }
-    ]
+    buttons: [{ label: "Cancel", cls: "ghost", fn: () => res(null) },
+              { label: "Save", cls: "primary", fn: v => res(v || null) }]
   });
   $("mInput").onkeydown = e => {
     if (e.key === "Enter") {
       const v = $("mInput").value.trim();
-      modalCancel = null;
-      $("modalWrap").classList.remove("on");
-      res(v || null);
+      modalCancel = null; $("modalWrap").classList.remove("on"); res(v || null);
     }
   };
 });
 const askConfirm = (title, text) => new Promise(res => {
   openModal({
     title, text, onCancel: () => res(false),
-    buttons: [
-      { label: "Cancel", cls: "ghost", fn: () => res(false) },
-      { label: "Confirm", cls: "danger", fn: () => res(true) }
-    ]
+    buttons: [{ label: "Cancel", cls: "ghost", fn: () => res(false) },
+              { label: "Confirm", cls: "danger", fn: () => res(true) }]
   });
 });
-$("modalWrap").addEventListener("click", e => {
-  if (e.target.id === "modalWrap") dismissModal();
-});
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && $("modalWrap").classList.contains("on")) dismissModal();
-  if (e.ctrlKey && (e.key === "s" || e.key === "S")) { e.preventDefault(); doSave(); }
-  if (e.altKey && e.key >= "1" && e.key <= "7") { e.preventDefault(); showPage(PAGES[+e.key - 1]); }
-});
+$("modalWrap").addEventListener("click", e => { if (e.target.id === "modalWrap") dismissModal(); });
 
-/* ────────────────────────────── theme ────────────────────────────── */
+/* ─────────────────────────── theme ─────────────────────────── */
 function applyTheme(next, persist = true) {
   theme = next === "dark" ? "dark" : "light";
   document.documentElement.setAttribute("data-theme", theme);
-  $("themeIcon").innerHTML = `<use href="#${theme === "dark" ? "i-sun" : "i-moon"}"/>`;
+  const icon = $("themeIcon");
+  if (icon) icon.innerHTML = `<use href="#${theme === "dark" ? "i-sun" : "i-moon"}"/>`;
   try { localStorage.setItem("elf.theme", theme); } catch (e) {}
   if (persist) { try { api("set_theme", theme); } catch (e) {} }
+  if (S) renderThemeCards();
 }
 $("themeBtn").onclick = () => applyTheme(theme === "dark" ? "light" : "dark");
 
-/* ────────────────────────────── switches ────────────────────────────── */
-function setSwitch(el, on) {
+/* ─────────────────────────── switches ─────────────────────────── */
+function setSwitch(el, on) { if (el) el.setAttribute("aria-checked", on ? "true" : "false"); }
+function bindSwitch(el, fn) {
   if (!el) return;
-  el.setAttribute("aria-checked", on ? "true" : "false");
-}
-function bindSwitch(el, onChange) {
   el.addEventListener("click", () => {
     const next = el.getAttribute("aria-checked") !== "true";
     setSwitch(el, next);
-    onChange(next);
+    fn(next);
   });
 }
-function bindAllSwitch(root, fn) {
-  root.querySelectorAll(".switch").forEach(sw => bindSwitch(sw, fn));
+
+/* ─────────────────────────── tabs ─────────────────────────── */
+function initTabs() {
+  document.querySelectorAll("[data-tabs]").forEach(group => {
+    const key = group.dataset.tabs;
+    group.querySelectorAll("[data-tab]").forEach(btn => {
+      btn.onclick = () => {
+        group.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b === btn));
+        document.querySelectorAll(`[data-panel^="${key}:"]`).forEach(p =>
+          p.classList.toggle("on", p.dataset.panel === `${key}:${btn.dataset.tab}`));
+      };
+    });
+  });
 }
 
-/* ────────────────────────────── state ────────────────────────────── */
+/* ─────────────────────────── state ─────────────────────────── */
 function applyState(st, { markDirty = false } = {}) {
   if (!st || !st.cfg) return;
   S = st;
-  if (markDirty) dirty = true;
-  else if (typeof st.dirty === "boolean") dirty = !!st.dirty;
+  dirty = markDirty ? true : !!st.dirty;
   renderAll();
 }
 async function mut(p) {
@@ -190,60 +192,40 @@ async function mut(p) {
   } catch (e) { toast("Action failed", "err"); console.error(e); }
 }
 function renderAll() {
-  renderChrome();
-  renderDevices();
-  renderColor();
-  renderTune();
-  renderModes();
-  renderTiming();
-  renderAmbi();
-  renderSettings();
-  paintAll();
-  renderSave();
+  renderChrome(); renderDevices(); renderColor(); renderTune();
+  renderModes(); renderTiming(); renderAmbi(); renderSettings();
+  paintAll(); renderSave();
 }
 function renderChrome() {
   const n = (S.connected || []).length;
   $("sideConn").textContent = n;
   $("statConn").textContent = n;
+  $("navDevBadge").textContent = n;
   $("chipConnText").textContent = `${n} connected`;
   $("chipConn").className = "status-chip " + (n ? "ok" : "");
   const bt = S.bt_state;
   $("sideBt").textContent = bt === "on" ? "On" : bt === "off" ? "Off" : "—";
-  const ambi = S.ambi_running;
-  $("sideAmbi").textContent = ambi ? "Live" : "Idle";
-  $("statAmbi").textContent = ambi ? "Live" : "Idle";
-  $("chipAmbiText").textContent = ambi ? "Ambi live" : "Ambi idle";
-  $("chipAmbi").className = "status-chip " + (ambi ? "ok" : "idle");
+  $("sideBt").className = "mini-val " + (bt === "on" ? "ok" : "");
+  $("sideAmbi").textContent = S.ambi_running ? "Live" : "Idle";
+  $("statAmbi").textContent = S.ambi_running ? "Live" : "Idle";
+  $("chipAmbiText").textContent = S.ambi_running ? "Ambi live" : "Ambi idle";
+  $("chipAmbi").className = "status-chip " + (S.ambi_running ? "ok" : "");
+  const ab = $("navAmbiBadge");
+  ab.textContent = S.ambi_running ? "Live" : "Off";
+  ab.className = "badge-mini" + (S.ambi_running ? " live" : "");
   $("sideVer").textContent = "v" + S.ver;
   $("statGroup").textContent = S.selected_group || "—";
-  setOrb();
+  $("appVersion").textContent = "v" + S.ver;
 }
 function renderSave() {
   const b = $("saveBtn");
   b.classList.toggle("dirty", dirty);
   b.querySelector("span").textContent = dirty ? "Save changes" : "Save";
 }
-function setOrb() {
-  const h = hx(color.r, color.g, color.b);
-  const well = $("colorWell");
-  if (well) well.style.background = h;
-  const ambi = $("ambiPrev");
-  if (ambi && S && S.ambi_running) return;
-}
-async function doSave() {
-  await api("save");
-  dirty = false;
-  renderSave();
-  toast("Settings saved");
-}
-async function doDiscard() {
-  const st = await api("discard");
-  dirty = false;
-  applyState(st);
-  toast("Reverted to last save");
-}
+async function doSave() { await api("save"); dirty = false; renderSave(); toast("Settings saved"); }
+async function doDiscard() { const st = await api("discard"); dirty = false; applyState(st); toast("Reverted to last save"); }
 
-/* ────────────────────────────── navigation ────────────────────────────── */
+/* ─────────────────────────── navigation ─────────────────────────── */
 async function showPage(next) {
   if (!PAGES.includes(next) || next === page) return;
   if (dirty) {
@@ -251,14 +233,12 @@ async function showPage(next) {
       title: "Unsaved changes",
       text: "You have edits that haven't been saved. What should happen?",
       onCancel: () => res("cancel"),
-      buttons: [
-        { label: "Cancel", cls: "ghost", fn: () => res("cancel") },
-        { label: "Discard", cls: "danger", fn: () => res("discard") },
-        { label: "Save", cls: "primary", fn: () => res("save") }
-      ]
+      buttons: [{ label: "Cancel", cls: "ghost", fn: () => res("cancel") },
+                { label: "Discard", cls: "danger", fn: () => res("discard") },
+                { label: "Save", cls: "primary", fn: () => res("save") }]
     }));
-    if (r === "cancel" || !r) return;
-    if (r === "save") await doSave(); else if (r === "discard") await doDiscard();
+    if (!r || r === "cancel") return;
+    if (r === "save") await doSave(); else await doDiscard();
   }
   page = next;
   document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.id === "pg-" + next));
@@ -267,44 +247,149 @@ async function showPage(next) {
   $("scroll").scrollTop = 0;
 }
 
-/* ────────────────────────────── color model ────────────────────────────── */
+/* ─────────────────────────── color model ─────────────────────────── */
 function setColor(r, g, b, src) {
   color = { r: Math.round(r), g: Math.round(g), b: Math.round(b) };
   const h = hx(color.r, color.g, color.b);
-  $("colorWell").style.background = h;
-  // contrast-aware label: dark ink on light colors, white on dark colors
-  const lum = (0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b) / 255;
-  $("colorWell").style.setProperty("--well-ink", lum > 0.62 ? "#0D1020" : "#FFFFFF");
-  $("wellHex").textContent = h;
-  $("cHex").textContent = h;
-  $("cRgb").textContent = `${color.r}, ${color.g}, ${color.b}`;
   const [hh, ss, ll] = rgb2hsl(color.r, color.g, color.b);
-  $("cHsl").textContent = `${Math.round(hh)}, ${Math.round(ss)}%, ${Math.round(ll)}%`;
-  if (src !== "hsl") {
-    $("hSl").value = hh; $("sSl").value = ss; $("lSl").value = ll;
-  }
-  if (src !== "rgb") {
-    $("rSl").value = color.r; $("gSl").value = color.g; $("bSl").value = color.b;
-  }
+  $("wheelHex").textContent = h;
+  $("hexIn").value = h;
+  if (src !== "hsl") { $("hSl").value = hh; $("sSl").value = ss; $("lSl").value = ll; }
+  if (src !== "rgb") { $("rSl").value = color.r; $("gSl").value = color.g; $("bSl").value = color.b; }
+  if (src !== "wheel") { $("wheelL").value = ll; $("wheelLVal").textContent = Math.round(ll) + "%"; }
   $("hVal").textContent = Math.round(hh);
   $("sVal").textContent = Math.round(ss) + "%";
   $("lVal").textContent = Math.round(ll) + "%";
   $("rVal").textContent = color.r;
   $("gVal").textContent = color.g;
   $("bVal").textContent = color.b;
-  $("hexIn").value = h;
+  syncWheelPointer(hh, ss);
   paintAll($("pg-color"));
   tunePreview();
+  renderHarmony(hh);
 }
 const liveSend = debounce(() => {
   if ($("liveSw").getAttribute("aria-checked") === "true") api("set_color", color.r, color.g, color.b);
 }, 140);
 
-/* ────────────────────────────── devices ────────────────────────────── */
+/* ─────────────────────────── color wheel ─────────────────────────── */
+let wheelReady = false;
+function drawWheel() {
+  const canvas = $("wheel");
+  if (!canvas || wheelReady) return;
+  const ctx = canvas.getContext("2d");
+  const size = canvas.width;
+  const img = ctx.createImageData(size, size);
+  const cx = size / 2, cy = size / 2, R = size / 2 - 1;
+  const data = img.data;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - cx + .5, dy = y - cy + .5;
+      const d = Math.hypot(dx, dy);
+      const i = (y * size + x) * 4;
+      if (d > R) { data[i + 3] = 0; continue; }
+      const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+      const sat = Math.min(1, d / R);
+      const [r, g, b] = hsv2rgb(hue, sat, 1);
+      data[i] = r; data[i + 1] = g; data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  wheelReady = true;
+}
+function syncWheelPointer(h, s) {
+  const dot = $("wheelDot");
+  if (!dot) return;
+  const R = WHEEL / 2 - 22;
+  const rad = (h * Math.PI) / 180;
+  const r = (clamp(s, 0, 100) / 100) * R;
+  dot.style.left = (WHEEL / 2 + Math.cos(rad) * r) + "px";
+  dot.style.top = (WHEEL / 2 - Math.sin(rad) * r) + "px";
+  dot.style.background = hx(color.r, color.g, color.b);
+}
+function wheelPick(ev) {
+  const canvas = $("wheel");
+  const rect = canvas.getBoundingClientRect();
+  const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+  const cx = rect.width / 2, cy = rect.height / 2;
+  const dx = x - cx, dy = y - cy;
+  const d = Math.hypot(dx, dy);
+  const R = rect.width / 2 - 1;
+  const h = (Math.atan2(-dy, dx) * 180 / Math.PI + 360) % 360;
+  const s = clamp((d / R) * 100, 0, 100);
+  const l = +$("wheelL").value;
+  setColor(...hsl2rgb(h, s, l), "wheel");
+  liveSend();
+}
+function bindWheel() {
+  const canvas = $("wheel");
+  let dragging = false;
+  canvas.addEventListener("pointerdown", e => {
+    dragging = true;
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    wheelPick(e);
+  });
+  canvas.addEventListener("pointermove", e => { if (dragging) wheelPick(e); });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    mut(api("set_color", color.r, color.g, color.b));
+  };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+  canvas.addEventListener("lostpointercapture", end);
+}
+function renderHarmony(h) {
+  const row = $("harmonyRow");
+  if (!row) return;
+  const l = +$("wheelL").value;
+  const s = rgb2hsl(color.r, color.g, color.b)[1];
+  const offsets = [0, 30, -30, 180, 120, 240];
+  row.innerHTML = "";
+  offsets.forEach((off, i) => {
+    const hue = (h + off + 360) % 360;
+    const [r, g, b] = hsl2rgb(hue, Math.max(35, s), clamp(l, 25, 85));
+    const btn = document.createElement("button");
+    btn.style.background = hx(r, g, b);
+    btn.title = i === 0 ? "Base" : i === 3 ? "Complementary" : "Analogous / triadic";
+    btn.onclick = () => { setColor(r, g, b); mut(api("set_color", r, g, b)); };
+    row.appendChild(btn);
+  });
+}
+
+/* ─────────────────────────── scenes ─────────────────────────── */
+const SCENES = [
+  ["Cozy", 255, 170, 90, 55],
+  ["Focus", 200, 225, 255, 100],
+  ["Cinema", 110, 70, 255, 35],
+  ["Party", 255, 0, 120, 100],
+];
+function renderScenes() {
+  const row = $("sceneRow");
+  if (!row) return;
+  row.innerHTML = "";
+  SCENES.forEach(([label, r, g, b, bri]) => {
+    const btn = document.createElement("button");
+    btn.className = "btn sm";
+    btn.style.cssText = "justify-content:flex-start;gap:8px";
+    btn.innerHTML = `<span style="width:12px;height:12px;border-radius:4px;background:${hx(r, g, b)};border:1px solid rgba(0,0,0,.15)"></span><span>${label}</span>`;
+    btn.onclick = async () => {
+      setColor(r, g, b);
+      await api("set_color", r, g, b);
+      await api("set_brightness", bri, "ALL");
+      $("briSl").value = bri; $("briVal").textContent = bri; paintRange($("briSl"));
+      toast(`${label} scene applied`);
+    };
+    row.appendChild(btn);
+  });
+}
+
+/* ─────────────────────────── devices ─────────────────────────── */
 function initials(name) {
   const n = (name || "?").replace(/[^A-Za-z0-9 ]/g, " ").trim();
-  const parts = n.split(/\s+/);
-  return ((parts[0] || "?")[0] + (parts[1] ? parts[1][0] : (parts[0] || "")[1] || "")).toUpperCase();
+  const p = n.split(/\s+/);
+  return ((p[0] || "?")[0] + (p[1] ? p[1][0] : (p[0] || "")[1] || "")).toUpperCase();
 }
 function renderDevices() {
   const box = $("foundList");
@@ -321,31 +406,25 @@ function renderDevices() {
       cb.className = "check";
       const inp = document.createElement("input");
       inp.type = "checkbox"; inp.checked = checked.has(d.addr);
-      inp.onchange = () => inp.checked ? checked.add(d.addr) : checked.delete(d.addr);
+      inp.onchange = () => { inp.checked ? checked.add(d.addr) : checked.delete(d.addr); };
       cb.appendChild(inp);
-
       const av = document.createElement("div");
       av.className = "avatar"; av.textContent = initials(d.name);
-
       const main = document.createElement("div");
       main.className = "list-main";
       main.innerHTML = `<div class="list-t"></div><div class="list-s"></div>`;
       main.querySelector(".list-t").textContent = d.name || "Unknown strip";
       main.querySelector(".list-s").textContent = d.addr;
-
       const badge = document.createElement("span");
       badge.className = "badge " + (d.connected ? "ok" : "");
       badge.textContent = d.connected ? "Connected" : `${d.rssi} dBm`;
-
       const add = document.createElement("button");
       add.className = "btn sm"; add.textContent = "Add";
       add.onclick = () => mut(api("group_add_many", [d.addr]));
-
       const conn = document.createElement("button");
       conn.className = "btn sm " + (d.connected ? "" : "primary");
       conn.textContent = d.connected ? "Reconnect" : "Connect";
       conn.onclick = () => api("connect_one", d.addr);
-
       row.append(cb, av, main, badge, add, conn);
       box.appendChild(row);
     });
@@ -363,38 +442,33 @@ function renderDevices() {
   const ml = $("memberList");
   ml.innerHTML = "";
   const members = S.group_members || [];
-  if (!members.length) {
-    ml.innerHTML = `<div class="empty"><b>Empty group</b>Add a discovered device to start controlling it.</div>`;
-  } else {
-    members.forEach(m => {
-      const row = document.createElement("div");
-      row.className = "list-row";
-      const av = document.createElement("div");
-      av.className = "avatar"; av.textContent = initials(m.name);
-      const main = document.createElement("div");
-      main.className = "list-main";
-      main.innerHTML = `<div class="list-t"></div><div class="list-s"></div>`;
-      main.querySelector(".list-t").textContent = m.name || m.addr;
-      main.querySelector(".list-s").textContent = m.addr;
-      const badge = document.createElement("span");
-      badge.className = "badge " + (m.connected ? "ok" : "");
-      badge.textContent = m.connected ? "Live" : "Saved";
-      const x = document.createElement("button");
-      x.className = "btn sm ghost"; x.innerHTML = `<svg><use href="#i-x"/></svg>`;
-      x.title = "Remove from group";
-      x.onclick = () => mut(api("group_remove", m.addr));
-      row.append(av, main, badge, x);
-      ml.appendChild(row);
-    });
-  }
+  if (!members.length) ml.innerHTML = `<div class="empty"><b>Empty group</b>Add a discovered device to start controlling it.</div>`;
+  members.forEach(m => {
+    const row = document.createElement("div");
+    row.className = "list-row";
+    const av = document.createElement("div");
+    av.className = "avatar"; av.textContent = initials(m.name);
+    const main = document.createElement("div");
+    main.className = "list-main";
+    main.innerHTML = `<div class="list-t"></div><div class="list-s"></div>`;
+    main.querySelector(".list-t").textContent = m.name || m.addr;
+    main.querySelector(".list-s").textContent = m.addr;
+    const badge = document.createElement("span");
+    badge.className = "badge " + (m.connected ? "ok" : "");
+    badge.textContent = m.connected ? "Live" : "Saved";
+    const x = document.createElement("button");
+    x.className = "btn sm ghost"; x.innerHTML = `<svg><use href="#i-x"/></svg>`;
+    x.title = "Remove from group";
+    x.onclick = () => mut(api("group_remove", m.addr));
+    row.append(av, main, badge, x);
+    ml.appendChild(row);
+  });
 
   $("rememberedTxt").textContent = S.remembered_text || "—";
-  const dynOn = !!S.dyn_on;
-  const lamps = S.dyn_lamps || 0;
+  const dynOn = !!S.dyn_on, lamps = S.dyn_lamps || 0;
   const db = $("dynBadge");
   db.textContent = !dynOn ? "Off" : lamps ? `${lamps} lamp${lamps > 1 ? "s" : ""}` : "No lamps";
   db.className = "badge " + (dynOn && lamps ? "ok" : "");
-
   $("logBox").textContent = logs.join("\n");
   $("logBox").scrollTop = 1e9;
 }
@@ -405,27 +479,25 @@ function pushLog(msg) {
   if (S) { $("logBox").textContent = logs.join("\n"); $("logBox").scrollTop = 1e9; }
 }
 
-/* ────────────────────────────── colors ────────────────────────────── */
+/* ─────────────────────────── colors page ─────────────────────────── */
 function renderColor() {
   const c = S.cfg;
   setSwitch($("liveSw"), !!c.live_send);
   setColor(c.last_r, c.last_g, c.last_b);
   $("briSl").value = c.last_brightness;
   $("briVal").textContent = c.last_brightness;
+  renderScenes();
 
   const pr = $("presetRow"); pr.innerHTML = "";
   (S.color_presets || []).forEach(([r, g, b]) => {
     const b2 = document.createElement("button");
-    b2.className = "sw";
-    b2.style.background = hx(r, g, b);
-    b2.title = hx(r, g, b);
+    b2.className = "sw"; b2.style.background = hx(r, g, b); b2.title = hx(r, g, b);
     b2.onclick = () => { setColor(r, g, b); mut(api("set_color", r, g, b)); };
     pr.appendChild(b2);
   });
-
   const rc = $("recentRow"); rc.innerHTML = "";
   const recents = S.recent || [];
-  if (!recents.length) rc.innerHTML = `<span class="list-s" style="font-family:var(--sans)">No recent colors yet.</span>`;
+  if (!recents.length) rc.innerHTML = `<span class="list-s" style="font-family:var(--sans)">No recent colours yet.</span>`;
   recents.forEach(([r, g, b]) => {
     const b2 = document.createElement("button");
     b2.className = "sw"; b2.style.background = hx(r, g, b); b2.title = hx(r, g, b);
@@ -434,9 +506,9 @@ function renderColor() {
   });
 }
 
-/* ────────────────────────────── tune ────────────────────────────── */
-const PRIMS = [["prim_r", "Red", "#DC2626"], ["prim_g", "Green", "#0EA371"],
-               ["prim_b", "Blue", "#4F46E5"], ["white_pt", "White", "#0D1020"]];
+/* ─────────────────────────── tune ─────────────────────────── */
+const PRIMS = [["prim_r", "Red", "#D92D20"], ["prim_g", "Green", "#0E9F6E"],
+               ["prim_b", "Blue", "#4F46E5"], ["white_pt", "White", "#0C1020"]];
 function renderTune() {
   const t = S.cfg;
   setSwitch($("calEn"), !!t.cal_enabled);
@@ -452,14 +524,14 @@ function renderTune() {
 
   const box = $("primRows");
   box.innerHTML = "";
-  PRIMS.forEach(([attr, label, colorHex]) => {
+  PRIMS.forEach(([attr, label, colHex]) => {
     const vals = [...t[attr]];
     const block = document.createElement("div");
-    block.style.cssText = "border:1px solid var(--line);border-radius:14px;padding:12px;background:var(--surface-2)";
+    block.style.cssText = "border:1px solid var(--line);border-radius:14px;padding:11px;background:var(--surface-2)";
     block.innerHTML = `
       <div class="field" style="margin:0">
-        <span class="field-label" style="flex:0 0 auto;color:${colorHex}">${label}</span>
-        <span class="sw" style="width:28px;height:28px;background:${hx(...vals)}"></span>
+        <span class="field-label" style="flex:0 0 auto;color:${colHex}">${label}</span>
+        <span class="sw" style="width:26px;height:26px;background:${hx(...vals)}"></span>
         <span class="field-val" style="flex:0 0 auto">${hx(...vals)}</span>
         <div style="flex:1"></div>
         <button class="btn sm" data-show="${attr}">Show</button>
@@ -467,22 +539,18 @@ function renderTune() {
     ["R", "G", "B"].forEach((c, i) => {
       const row = document.createElement("div");
       row.className = "field";
-      row.innerHTML = `<span class="field-label" style="flex:0 0 24px">${c}</span>`;
+      row.innerHTML = `<span class="field-label" style="flex:0 0 20px">${c}</span>`;
       const sl = document.createElement("input");
       sl.type = "range"; sl.min = 0; sl.max = 255; sl.value = vals[i];
       const v = document.createElement("span");
       v.className = "field-val"; v.textContent = vals[i];
       sl.oninput = () => { vals[i] = +sl.value; v.textContent = sl.value; paintRange(sl); };
       sl.onchange = () => mut(api("tune_set", "prim", { attr, vals }));
-      row.append(sl, v);
-      block.appendChild(row);
-      paintRange(sl);
+      row.append(sl, v); block.appendChild(row); paintRange(sl);
     });
-    const showBtn = block.querySelector("[data-show]");
-    showBtn.onclick = () => {
+    block.querySelector("[data-show]").onclick = () => {
       const pure = { prim_r: [255, 0, 0], prim_g: [0, 255, 0], prim_b: [0, 0, 255], white_pt: [255, 255, 255] }[attr];
-      setColor(...pure);
-      api("set_color", ...pure);
+      setColor(...pure); api("set_color", ...pure);
     };
     box.appendChild(block);
   });
@@ -494,7 +562,6 @@ function renderTune() {
     b2.onclick = () => { setColor(r, g, b); api("set_color", r, g, b); };
     tt.appendChild(b2);
   });
-
   renderTuneProfiles();
   tunePreview();
 }
@@ -530,30 +597,52 @@ function renderTuneProfiles() {
   const sel = $("tuneProfSel");
   const names = Object.keys(S.tune_profiles || {}).sort();
   sel.innerHTML = names.length ? "" : `<option value="">No profiles yet</option>`;
-  names.forEach(n => {
-    const o = document.createElement("option");
-    o.value = n; o.textContent = n;
-    sel.appendChild(o);
-  });
+  names.forEach(n => { const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o); });
 }
 
-/* ────────────────────────────── modes ────────────────────────────── */
+/* ─────────────────────────── modes ─────────────────────────── */
+const CATS = ["All", "Static", "Gradient", "Cross", "Strobe"];
+function modeCategory(name, idx) {
+  const n = name.toLowerCase();
+  if (n.includes("static")) return "Static";
+  if (n.includes("cross") || n.includes("jump")) return "Cross";
+  if (n.includes("strobe") || n.includes("flash")) return "Strobe";
+  if (n.includes("gradual") || n.includes("fade")) return "Gradient";
+  return "Other";
+}
 function renderModes() {
+  const chips = $("catChips");
+  if (!chips.dataset.ready) {
+    chips.dataset.ready = "1";
+    CATS.forEach(c => {
+      const b = document.createElement("button");
+      b.className = "chip" + (c === "All" ? " on" : "");
+      b.textContent = c;
+      b.onclick = () => {
+        modeCat = c;
+        chips.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === b));
+        renderModes();
+      };
+      chips.appendChild(b);
+    });
+  }
   const grid = $("modeGrid");
-  const q = ($("modeSearch").value || "").toLowerCase();
+  const q = modeFilter.trim().toLowerCase();
   grid.innerHTML = "";
   let shown = 0;
   (S.mode_names || []).forEach((m, i) => {
+    const cat = modeCategory(m, i);
+    if (modeCat !== "All" && cat !== modeCat) return;
     if (q && !m.toLowerCase().includes(q) && !String(i).includes(q)) return;
     shown++;
     const b = document.createElement("button");
     b.className = "mode-btn" + (i === S.cfg.last_mode ? " on" : "");
     b.innerHTML = `<span class="n">${String(i).padStart(2, "0")}</span><span></span>`;
     b.querySelector("span:last-child").textContent = m;
-    b.onclick = () => mut(api("send_mode", i)).then(() => renderModes());
+    b.onclick = () => mut(api("send_mode", i)).then(renderModes);
     grid.appendChild(b);
   });
-  if (!shown) grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><b>No matches</b>Try a different search.</div>`;
+  if (!shown) grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><b>No matches</b>Try another search or category.</div>`;
   $("modeCount").textContent = `${shown} effect${shown === 1 ? "" : "s"}`;
   $("curMode").textContent = S.mode_names[S.cfg.last_mode] || "—";
   $("spdSl").value = S.cfg.last_speed;
@@ -562,7 +651,7 @@ function renderModes() {
   $("mbVal").textContent = S.cfg.last_brightness;
 }
 
-/* ────────────────────────────── timing ────────────────────────────── */
+/* ─────────────────────────── timing ─────────────────────────── */
 function timerCard(title, t, slot) {
   const card = document.createElement("div");
   card.className = "card";
@@ -578,10 +667,9 @@ function timerCard(title, t, slot) {
         <div style="flex:1"></div>
         <button class="btn sm" data-on>${t.on ? "Turn off" : "Turn on"}</button>
       </div>
-      <div class="hr"></div>
+      <div class="hr" style="height:1px;background:var(--line);margin:12px 0"></div>
       <div class="field" style="align-items:flex-start">
-        <span class="field-label">Days</span>
-        <div class="days"></div>
+        <span class="field-label">Days</span><div class="days"></div>
       </div>
       <div class="field" style="justify-content:flex-end;margin-top:12px">
         <button class="btn sm primary" data-send>Send timer</button>
@@ -593,10 +681,7 @@ function timerCard(title, t, slot) {
     const b = document.createElement("button");
     b.className = "day" + (d ? " on" : "");
     b.textContent = DAYS[i];
-    b.onclick = () => {
-      dayState[i] = !dayState[i];
-      b.classList.toggle("on", dayState[i]);
-    };
+    b.onclick = () => { dayState[i] = !dayState[i]; b.classList.toggle("on", dayState[i]); };
     daysBox.appendChild(b);
   });
   let on = t.on;
@@ -604,13 +689,13 @@ function timerCard(title, t, slot) {
   onBtn.onclick = () => {
     on = !on;
     onBtn.textContent = on ? "Turn off" : "Turn on";
-    card.querySelector(".badge").textContent = on ? "Enabled" : "Disabled";
-    card.querySelector(".badge").className = "badge " + (on ? "ok" : "");
+    const badge = card.querySelector(".badge");
+    badge.textContent = on ? "Enabled" : "Disabled";
+    badge.className = "badge " + (on ? "ok" : "");
   };
   card.querySelector("[data-send]").onclick = () => {
     const [h, m] = card.querySelector("input[type=time]").value.split(":").map(Number);
-    mut(api("send_timer", slot, h, m, on, dayState))
-      .then(() => toast(`Timer ${slot + 1} sent`));
+    mut(api("send_timer", slot, h, m, on, dayState)).then(() => toast(`Timer ${slot + 1} sent`));
   };
   return card;
 }
@@ -619,89 +704,66 @@ function renderTiming() {
   box.innerHTML = "";
   box.appendChild(timerCard("Timer 1", S.t1, 0));
   box.appendChild(timerCard("Timer 2", S.t2, 1));
-
   const list = $("schedList");
   list.innerHTML = "";
   const sch = S.cfg.schedules || [];
-  if (!sch.length) {
-    list.innerHTML = `<div class="empty"><b>No schedules</b>Add one to automate power, color, or effects.</div>`;
-  }
+  if (!sch.length) list.innerHTML = `<div class="empty"><b>No schedules</b>Add one to automate power, colour, or effects.</div>`;
   sch.forEach((s, idx) => {
     const row = document.createElement("div");
-    row.className = "list-row";
-    row.style.flexWrap = "wrap";
-
+    row.className = "list-row"; row.style.flexWrap = "wrap";
     const name = document.createElement("input");
-    name.type = "text"; name.value = s.name; name.style.width = "140px";
+    name.type = "text"; name.value = s.name; name.style.width = "132px";
     name.onchange = () => mut(api("sched_set", idx, "name", name.value));
-
     const time = document.createElement("input");
     time.type = "time"; time.className = "time-input";
     time.value = `${String(s.hour).padStart(2, "0")}:${String(s.min).padStart(2, "0")}`;
-    time.onchange = () => {
-      const [h, m] = time.value.split(":").map(Number);
-      mut(api("sched_time", idx, h, m));
-    };
-
+    time.onchange = () => { const [h, m] = time.value.split(":").map(Number); mut(api("sched_time", idx, h, m)); };
     const act = document.createElement("select");
-    [["power_on", "Power on"], ["power_off", "Power off"], ["color", "Color"], ["mode", "Effect"]].forEach(([v, l]) => {
+    [["power_on", "Power on"], ["power_off", "Power off"], ["color", "Colour"], ["mode", "Effect"]].forEach(([v, l]) => {
       const o = document.createElement("option"); o.value = v; o.textContent = l; act.appendChild(o);
     });
     act.value = s.action;
     act.onchange = () => mut(api("sched_set", idx, "action", act.value));
-
     const days = document.createElement("div");
     days.className = "days";
     (s.days || []).forEach((d, i) => {
       const b = document.createElement("button");
       b.className = "day" + (d ? " on" : "");
       b.textContent = DAYS[i];
-      b.onclick = () => {
-        const next = !b.classList.contains("on");
-        b.classList.toggle("on", next);
-        mut(api("sched_day", idx, i, next));
-      };
+      b.onclick = () => { const n = !b.classList.contains("on"); b.classList.toggle("on", n); mut(api("sched_day", idx, i, n)); };
       days.appendChild(b);
     });
-
     const en = document.createElement("button");
-    en.className = "switch";
-    en.setAttribute("role", "switch");
+    en.className = "switch"; en.setAttribute("role", "switch");
     en.setAttribute("aria-checked", s.enabled ? "true" : "false");
     en.setAttribute("aria-label", "Enable schedule");
     bindSwitch(en, on => mut(api("sched_set", idx, "enabled", on)));
-
     const del = document.createElement("button");
-    del.className = "btn sm ghost";
-    del.innerHTML = `<svg><use href="#i-x"/></svg>`;
+    del.className = "btn sm ghost"; del.innerHTML = `<svg><use href="#i-x"/></svg>`;
     del.title = "Delete schedule";
     del.onclick = () => mut(api("sched_del", idx)).then(renderTiming);
-
     const top = document.createElement("div");
-    top.style.cssText = "display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap";
+    top.style.cssText = "display:flex;align-items:center;gap:7px;flex:1;flex-wrap:wrap";
     top.append(name, time, act, en);
     row.append(top, days, del);
     list.appendChild(row);
   });
 }
 
-/* ────────────────────────────── ambilight ────────────────────────────── */
+/* ─────────────────────────── ambilight ─────────────────────────── */
 function renderAmbi() {
   const a = S.cfg;
   setSwitch($("ambiAuto"), !!a.ambi_on_startup);
   setSwitch($("ambiXf"), !!a.ambi_crossfade);
   setSwitch($("ambiDx"), !!a.ambi_use_dxcam);
+  setSwitch($("ambiWfOn"), (+a.ambi_white_floor || 0) > 0);
 
   ambiMode = a.ambi_mode === "full" ? "full" : "center";
-  $("ambiModeSeg").querySelectorAll("button").forEach(b =>
-    b.classList.toggle("on", b.dataset.m === ambiMode));
+  $("ambiModeSeg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.m === ambiMode));
 
-  const mon = $("ambiMon");
-  mon.innerHTML = "";
+  const mon = $("ambiMon"); mon.innerHTML = "";
   (S.monitors || [[1, "Monitor 1"]]).forEach(([i, label]) => {
-    const o = document.createElement("option");
-    o.value = i; o.textContent = label;
-    mon.appendChild(o);
+    const o = document.createElement("option"); o.value = i; o.textContent = label; mon.appendChild(o);
   });
   mon.value = String(a.ambi_monitor);
   $("ambiSample").value = a.ambi_sample.charAt(0).toUpperCase() + a.ambi_sample.slice(1);
@@ -712,33 +774,35 @@ function renderAmbi() {
   ambiLabels();
 
   const btn = $("ambiBtn");
-  btn.innerHTML = S.ambi_running
-    ? `<svg><use href="#i-stop"/></svg>Stop`
-    : `<svg><use href="#i-play"/></svg>Start`;
+  btn.innerHTML = S.ambi_running ? `<svg><use href="#i-stop"/></svg>Stop` : `<svg><use href="#i-play"/></svg>Start`;
   btn.className = "btn " + (S.ambi_running ? "danger" : "primary");
+  const btn2 = $("ambiBtn2");
+  if (btn2) {
+    btn2.innerHTML = btn.innerHTML;
+    btn2.className = "btn " + (S.ambi_running ? "danger" : "primary");
+    btn2.style.width = "100%";
+  }
+  $("liveStatus").textContent = S.ambi_running ? "Live" : "Idle";
+  $("liveStatus").className = "badge " + (S.ambi_running ? "ok" : "");
+  $("liveSample").textContent = a.ambi_sample.charAt(0).toUpperCase() + a.ambi_sample.slice(1);
 
-  const row = $("ambiPresetRow");
-  row.innerHTML = "";
+  const row = $("ambiPresetRow"); row.innerHTML = "";
   AMBI_PRESETS.forEach(n => {
     const b = document.createElement("button");
     b.className = "btn sm"; b.textContent = n;
     b.onclick = () => mut(api("ambi_preset", n)).then(renderAmbi);
     row.appendChild(b);
   });
-
   const sel = $("ambiCustomSel");
   const names = Object.keys(S.ambi_custom || {}).sort();
   sel.innerHTML = names.length ? "" : `<option value="">No saved presets</option>`;
-  names.forEach(n => {
-    const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o);
-  });
+  names.forEach(n => { const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o); });
 
-  const tiles = $("candTiles");
-  tiles.innerHTML = "";
+  const tiles = $("candTiles"); tiles.innerHTML = "";
   ["average", "dominant", "vibrant", "brightest"].forEach(k => {
     const t = document.createElement("div");
     t.className = "tile";
-    t.innerHTML = `<div class="chip" id="tile-${k}"></div><div class="lbl">${k.slice(0, 3)}</div>`;
+    t.innerHTML = `<div class="chip-c" id="tile-${k}"></div><div class="lbl">${k.slice(0, 3)}</div>`;
     tiles.appendChild(t);
   });
 }
@@ -755,14 +819,13 @@ const ambiChanged = debounce(() => {
   mut(api("ambi_set", {
     fps: +$("aFps").value, smooth: +$("aSm").value, brightness: +$("aBri").value,
     min_delta: +$("aMd").value, white_floor: +$("aWf").value, interval: +$("aIv").value,
-    mode: ambiMode, sample: $("ambiSample").value.toLowerCase(),
-    monitor: +$("ambiMon").value,
+    mode: ambiMode, sample: $("ambiSample").value.toLowerCase(), monitor: +$("ambiMon").value,
     crossfade: $("ambiXf").getAttribute("aria-checked") === "true",
     dxcam: $("ambiDx").getAttribute("aria-checked") === "true"
   }));
 }, 200);
 
-/* ────────────────────────────── settings ────────────────────────────── */
+/* ─────────────────────────── settings ─────────────────────────── */
 function renderSettings() {
   const c = S.cfg;
   setSwitch($("stStartup"), !!S.startup_on);
@@ -782,44 +845,142 @@ function renderSettings() {
   const badge = $("btState");
   badge.textContent = bt === "on" ? "On" : bt === "off" ? "Off" : "Unknown";
   badge.className = "badge " + (bt === "on" ? "ok" : bt === "off" ? "warn" : "");
-
-  $("dynStatus").textContent = c.dynlight_enabled
-    ? `${S.dyn_lamps || 0} lamp(s) available`
-    : "Off";
+  $("dynStatus").textContent = c.dynlight_enabled ? `${S.dyn_lamps || 0} lamp(s) available` : "Off";
   $("cfgPath").textContent = S.cfg_path || "—";
-
+  $("appVersion").textContent = "v" + S.ver;
   document.body.classList.toggle("reduce", !!c.reduce_motion);
-  renderChrome();
+  renderThemeCards();
+}
+function renderThemeCards() {
+  $("themeLight") && $("themeLight").classList.toggle("on", theme === "light");
+  $("themeDark") && $("themeDark").classList.toggle("on", theme === "dark");
 }
 
-/* ────────────────────────────── events ────────────────────────────── */
+/* ─────────────────────────── command palette ─────────────────────────── */
+let cmdItems = [], cmdSel = 0;
+function cmdActions() {
+  const acts = [];
+  PAGES.forEach((p, i) => acts.push({
+    group: "Navigate", label: TITLES[p], icon: "i-grid", hint: `Alt ${i + 1}`,
+    run: () => showPage(p)
+  }));
+  acts.push(
+    { group: "Actions", label: "Save changes", icon: "i-save", hint: "Ctrl S", run: doSave },
+    { group: "Actions", label: "Discard changes", icon: "i-x", run: doDiscard },
+    { group: "Actions", label: "Scan for devices", icon: "i-refresh", run: () => api("scan_start", 5) },
+    { group: "Actions", label: "Quick connect", icon: "i-link", run: () => api("scan_start", 3) },
+    { group: "Actions", label: "Power on", icon: "i-power", run: () => api("power", true) },
+    { group: "Actions", label: "Power off", icon: "i-power", run: () => api("power", false) },
+    { group: "Actions", label: (S && S.ambi_running) ? "Stop Ambilight" : "Start Ambilight", icon: "i-screen",
+      run: () => api(S && S.ambi_running ? "ambi_stop" : "ambi_start") },
+    { group: "Actions", label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme", icon: "i-appearance",
+      run: () => applyTheme(theme === "dark" ? "light" : "dark") },
+    { group: "Actions", label: "Pick colour from screen", icon: "i-eyedrop", run: pickFromScreen }
+  );
+  AMBI_PRESETS.forEach(n => acts.push({
+    group: "Ambilight presets", label: n, icon: "i-screen",
+    run: () => mut(api("ambi_preset", n)).then(renderAmbi)
+  }));
+  const named = [["Warm white", 255, 180, 100], ["Cool white", 200, 225, 255], ["Amber", 255, 160, 40],
+                 ["Cyan", 0, 220, 230], ["Violet", 150, 80, 255], ["Rose", 255, 60, 120]];
+  named.forEach(([l, r, g, b]) => acts.push({
+    group: "Colours", label: l, icon: "i-palette",
+    run: () => { setColor(r, g, b); mut(api("set_color", r, g, b)); }
+  }));
+  return acts;
+}
+function openCmdk() {
+  cmdItems = cmdActions();
+  cmdSel = 0;
+  $("cmdkInput").value = "";
+  renderCmdk("");
+  $("cmdk").classList.add("on");
+  setTimeout(() => $("cmdkInput").focus(), 30);
+}
+function closeCmdk() { $("cmdk").classList.remove("on"); }
+function renderCmdk(q) {
+  const list = $("cmdkList");
+  const query = q.trim().toLowerCase();
+  const filtered = cmdItems.filter(a => !query || a.label.toLowerCase().includes(query) || a.group.toLowerCase().includes(query));
+  cmdSel = clamp(cmdSel, 0, Math.max(0, filtered.length - 1));
+  list.innerHTML = "";
+  if (!filtered.length) {
+    list.innerHTML = `<div class="cmdk-empty">No matching commands.</div>`;
+    return;
+  }
+  let lastGroup = "";
+  filtered.forEach((a, i) => {
+    if (a.group !== lastGroup) {
+      lastGroup = a.group;
+      const g = document.createElement("div");
+      g.className = "cmdk-group"; g.textContent = a.group;
+      list.appendChild(g);
+    }
+    const b = document.createElement("button");
+    b.className = "cmdk-item" + (i === cmdSel ? " sel" : "");
+    b.innerHTML = `<svg><use href="#${a.icon}"/></svg><span></span>${a.hint ? `<span class="kbd">${a.hint}</span>` : ""}`;
+    b.querySelector("span").textContent = a.label;
+    b.onmouseenter = () => { cmdSel = i; markCmdk(list); };
+    b.onclick = () => { closeCmdk(); a.run(); };
+    b.dataset.idx = i;
+    list.appendChild(b);
+  });
+  list._filtered = filtered;
+}
+function markCmdk(list) {
+  list.querySelectorAll(".cmdk-item").forEach((el, i) => el.classList.toggle("sel", +el.dataset.idx === cmdSel));
+}
+function runCmdk() {
+  const list = $("cmdkList");
+  const arr = list._filtered || [];
+  const a = arr[cmdSel];
+  if (a) { closeCmdk(); a.run(); }
+}
+$("cmdkInput").addEventListener("input", e => { cmdSel = 0; renderCmdk(e.target.value); });
+$("cmdkInput").addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { e.preventDefault(); cmdSel++; renderCmdk($("cmdkInput").value); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); cmdSel--; renderCmdk($("cmdkInput").value); }
+  else if (e.key === "Enter") { e.preventDefault(); runCmdk(); }
+  else if (e.key === "Escape") { closeCmdk(); }
+});
+$("cmdk").addEventListener("click", e => { if (e.target.id === "cmdk") closeCmdk(); });
+$("cmdTrigger").onclick = openCmdk;
+
+/* ─────────────────────────── eyedropper ─────────────────────────── */
+async function pickFromScreen() {
+  if (!window.EyeDropper) { toast("Eyedropper is not available here", "err"); return; }
+  try {
+    const res = await new EyeDropper().open();
+    const t = res.sRGBHex.replace("#", "");
+    setColor(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16));
+    mut(api("set_color", color.r, color.g, color.b));
+    toast("Colour picked");
+  } catch (e) { /* user cancelled */ }
+}
+
+/* ─────────────────────────── events ─────────────────────────── */
 function handleEvent(evt) {
   try {
     switch (evt.t) {
       case "log": pushLog(evt.msg); break;
-      case "found":
-        S.found = evt.devices;
-        renderDevices();
-        break;
+      case "found": S.found = evt.devices; renderDevices(); break;
       case "conn":
         S.connected = evt.connected || [];
         if (evt.names) S.cfg.names = evt.names;
         if (evt.last) S.cfg.last_addresses = evt.last;
-        renderChrome(); renderDevices();
-        break;
-      case "bt":
-        S.bt_state = evt.state;
-        renderChrome(); renderSettings();
-        break;
-      case "dyn":
-        S.dyn_lamps = evt.lamps;
-        renderDevices(); renderSettings();
-        break;
+        renderChrome(); renderDevices(); break;
+      case "bt": S.bt_state = evt.state; renderChrome(); renderSettings(); break;
+      case "dyn": S.dyn_lamps = evt.lamps; renderDevices(); renderSettings(); break;
       case "ambi_tick": {
         const [r, g, b] = evt.color;
         $("ambiPrev").style.background = hx(r, g, b);
-        $("ambiStat").textContent =
-          `${evt.frames} frames · ${evt.sends} sends · ${evt.cap} ms${evt.eco ? " · eco" : ""} · rgb(${r}, ${g}, ${b})`;
+        $("ambiStat").textContent = `${evt.frames} frames · ${evt.sends} sends · ${evt.cap} ms${evt.eco ? " · eco" : ""} · rgb(${r}, ${g}, ${b})`;
+        $("liveFrames").textContent = evt.frames;
+        $("liveSends").textContent = evt.sends;
+        $("liveCap").textContent = evt.cap + " ms";
+        $("liveEco").textContent = evt.eco ? "On" : "Off";
+        $("liveStatus").textContent = "Live";
+        $("liveStatus").className = "badge ok";
         ["average", "dominant", "vibrant", "brightest"].forEach(k => {
           const t = $("tile-" + k);
           if (t && evt.stats && evt.stats[k]) t.style.background = hx(...evt.stats[k]);
@@ -827,23 +988,17 @@ function handleEvent(evt) {
         break;
       }
       case "ambi_state":
-        S.ambi_running = evt.running;
-        renderChrome(); renderAmbi();
-        break;
-      case "state":
-        applyState(evt.state);
-        break;
+        S.ambi_running = evt.running; renderChrome(); renderAmbi(); break;
+      case "state": applyState(evt.state); break;
     }
   } catch (e) { console.error(e); }
 }
 setInterval(() => {
-  try { api("poll").then(list => (list || []).forEach(handleEvent)).catch(() => {}); }
-  catch (e) {}
+  try { api("poll").then(list => (list || []).forEach(handleEvent)).catch(() => {}); } catch (e) {}
 }, 450);
 
-/* ────────────────────────────── bindings ────────────────────────────── */
+/* ─────────────────────────── bindings ─────────────────────────── */
 function bind() {
-  // nav + chrome
   document.querySelectorAll(".nav-item").forEach(b => b.onclick = () => showPage(b.dataset.page));
   $("pwrOn").onclick = () => { api("power", true); toast("Strip powered on"); };
   $("pwrOff").onclick = () => { api("power", false); toast("Strip powered off"); };
@@ -851,20 +1006,12 @@ function bind() {
   $("cfgSave").onclick = doSave;
 
   // devices
-  $("scanBtn").onclick = () => {
-    $("scanStatus").textContent = "Scanning…";
-    api("scan_start", 5);
-  };
-  $("quickBtn").onclick = () => {
-    $("scanStatus").textContent = "Scanning…";
-    api("scan_start", 3);
-  };
+  $("scanBtn").onclick = () => { $("scanStatus").textContent = "Scanning…"; api("scan_start", 5); };
+  $("quickBtn").onclick = () => { $("scanStatus").textContent = "Scanning…"; api("scan_start", 3); };
   $("connAllBtn").onclick = () => api("connect_all");
   $("disconnBtn").onclick = () => api("disconnect_all");
-  $("addAllBtn").onclick = () => mut(api("group_add_many", (S.found || []).map(d => d.addr)))
-    .then(() => toast("Added all found devices"));
-  $("addCheckedBtn").onclick = () => mut(api("group_add_many", [...checked]))
-    .then(() => { checked.clear(); toast("Added selected devices"); });
+  $("addAllBtn").onclick = () => mut(api("group_add_many", (S.found || []).map(d => d.addr))).then(() => toast("Added all found devices"));
+  $("addCheckedBtn").onclick = () => mut(api("group_add_many", [...checked])).then(() => { checked.clear(); toast("Added selected devices"); });
   $("groupSel").onchange = e => mut(api("group_select", e.target.value));
   $("grpNew").onclick = async () => {
     const n = await askName("New group", `Group ${Object.keys(S.groups).length + 1}`);
@@ -875,43 +1022,54 @@ function bind() {
     if (n && n !== S.selected_group) mut(api("group_rename", n));
   };
   $("grpDel").onclick = async () => {
-    if (await askConfirm("Delete group", `Delete “${S.selected_group}”? Devices stay connected.`))
-      mut(api("group_delete"));
+    if (await askConfirm("Delete group", `Delete “${S.selected_group}”? Devices stay connected.`)) mut(api("group_delete"));
   };
   $("forgetBtn").onclick = async () => {
-    if (await askConfirm("Forget devices", "Remove all remembered devices? You can re-add them later."))
-      mut(api("forget_remembered"));
+    if (await askConfirm("Forget devices", "Remove all remembered devices? You can re-add them later.")) mut(api("forget_remembered"));
   };
   $("dynRefresh").onclick = () => { api("dyn_refresh"); toast("Refreshing PC lamps"); };
   $("dynRefresh2").onclick = () => { api("dyn_refresh"); toast("Refreshing PC lamps"); };
-  $("dynAdd").onclick = () => mut(api("group_add_many", ["dynlight://pc"]))
-    .then(() => toast("PC lighting added to group"));
+  $("dynAdd").onclick = () => mut(api("group_add_many", ["dynlight://pc"])).then(() => toast("PC lighting added to group"));
+  document.querySelectorAll("[data-group-action]").forEach(b => b.onclick = () => {
+    const a = b.dataset.groupAction;
+    if (a === "color") mut(api("set_color", S.cfg.last_r, S.cfg.last_g, S.cfg.last_b)).then(() => toast("Colour sent to group"));
+    else if (a === "on") { api("power", true); toast("Group powered on"); }
+    else if (a === "off") { api("power", false); toast("Group powered off"); }
+    else { api("bt_refresh"); api("connect_all"); toast("Refreshing connections"); }
+  });
 
-  // colors
+  // color
   bindSwitch($("liveSw"), on => mut(api("set_pref", "live_send", on)));
-  const hsl = () => setColor(...hsl2rgb(+$("hSl").value, +$("sSl").value, +$("lSl").value), "hsl");
-  ["hSl", "sSl", "lSl"].forEach(id => {
-    $(id).oninput = () => { hsl(); liveSend(); };
-    $(id).onchange = () => mut(api("set_color", color.r, color.g, color.b));
-  });
-  const rgb = () => setColor(+$("rSl").value, +$("gSl").value, +$("bSl").value, "rgb");
-  ["rSl", "gSl", "bSl"].forEach(id => {
-    $(id).oninput = () => { rgb(); liveSend(); };
-    $(id).onchange = () => mut(api("set_color", color.r, color.g, color.b));
-  });
+  $("wheelL").oninput = () => {
+    const h = rgb2hsl(color.r, color.g, color.b)[0];
+    const s = rgb2hsl(color.r, color.g, color.b)[1];
+    const [r, g, b] = hsl2rgb(h, s, +$("wheelL").value);
+    setColor(r, g, b, "wheel");
+    $("wheelLVal").textContent = $("wheelL").value + "%";
+    liveSend();
+  };
+  $("wheelL").onchange = () => mut(api("set_color", color.r, color.g, color.b));
+  const hsl = () => { setColor(...hsl2rgb(+$("hSl").value, +$("sSl").value, +$("lSl").value), "hsl"); liveSend(); };
+  ["hSl", "sSl", "lSl"].forEach(id => { $(id).oninput = hsl; $(id).onchange = () => mut(api("set_color", color.r, color.g, color.b)); });
+  const rgb = () => { setColor(+$("rSl").value, +$("gSl").value, +$("bSl").value, "rgb"); liveSend(); };
+  ["rSl", "gSl", "bSl"].forEach(id => { $(id).oninput = rgb; $(id).onchange = () => mut(api("set_color", color.r, color.g, color.b)); });
   $("hexApply").onclick = () => {
     const t = $("hexIn").value.trim().replace(/^#/, "");
-    if (!/^[0-9a-fA-F]{6}$/.test(t)) { toast("Enter a 6-digit hex color", "err"); return; }
+    if (!/^[0-9a-fA-F]{6}$/.test(t)) { toast("Enter a 6-digit hex colour", "err"); return; }
     setColor(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16));
     mut(api("set_color", color.r, color.g, color.b));
   };
   $("hexIn").onkeydown = e => { if (e.key === "Enter") $("hexApply").click(); };
-  $("applyColorBtn").onclick = () => mut(api("set_color", color.r, color.g, color.b))
-    .then(() => toast("Color sent"));
+  $("copyHex").onclick = async () => {
+    const h = hx(color.r, color.g, color.b);
+    try { await navigator.clipboard.writeText(h); toast("Hex copied"); }
+    catch (e) { $("hexIn").select(); document.execCommand && document.execCommand("copy"); toast("Hex copied"); }
+  };
+  $("eyeBtn").onclick = pickFromScreen;
+  $("applyColorBtn").onclick = () => mut(api("set_color", color.r, color.g, color.b)).then(() => toast("Colour sent"));
   $("briSl").oninput = () => { $("briVal").textContent = $("briSl").value; paintRange($("briSl")); };
   $("briSl").onchange = () => mut(api("set_brightness", +$("briSl").value, chan));
-  $("briSend").onclick = () => mut(api("set_brightness", +$("briSl").value, chan))
-    .then(() => toast("Brightness sent"));
+  $("briSend").onclick = () => mut(api("set_brightness", +$("briSl").value, chan)).then(() => toast("Brightness sent"));
   $("chanSeg").querySelectorAll("button").forEach(b => b.onclick = () => {
     chan = b.dataset.ch;
     $("chanSeg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
@@ -920,23 +1078,17 @@ function bind() {
   $("wSend").onclick = () => mut(api("set_w", +$("wSl").value)).then(() => toast("White sent"));
   $("warmSl").oninput = () => { $("warmVal").textContent = $("warmSl").value; paintRange($("warmSl")); };
   $("coldSl").oninput = () => { $("coldVal").textContent = $("coldSl").value; paintRange($("coldSl")); };
-  $("cctSend").onclick = () => mut(api("set_cct", +$("warmSl").value, +$("coldSl").value))
-    .then(() => toast("White balance sent"));
-  $("rgbwSend").onclick = () => api("set_rgbw", $("chRgb").checked, $("chW").checked, $("chCct").checked, chan)
-    .then(() => toast("Channels updated"));
-  $("pinsSend").onclick = () => api("set_pins", +$("pin1").value, +$("pin2").value, +$("pin3").value)
-    .then(() => toast("Pin order sent"));
+  $("cctSend").onclick = () => mut(api("set_cct", +$("warmSl").value, +$("coldSl").value)).then(() => toast("White balance sent"));
+  $("rgbwSend").onclick = () => api("set_rgbw", $("chRgb").checked, $("chW").checked, $("chCct").checked, chan).then(() => toast("Channels updated"));
+  $("pinsSend").onclick = () => api("set_pins", +$("pin1").value, +$("pin2").value, +$("pin3").value).then(() => toast("Pin order sent"));
 
   // tune
   $("tuneReset").onclick = async () => {
-    if (await askConfirm("Reset calibration", "Restore all calibration values to defaults?"))
-      mut(api("tune_reset")).then(() => toast("Calibration reset"));
+    if (await askConfirm("Reset calibration", "Restore all calibration values to defaults?")) mut(api("tune_reset")).then(() => toast("Calibration reset"));
   };
   $("wbShow").onclick = () => api("wb_show");
-  document.querySelectorAll("[data-wb]").forEach(b =>
-    b.onclick = () => mut(api("wb_nudge", b.dataset.wb)));
-  ["grSl", "ggSl", "gbSl", "gamSl", "tmpSl", "satSl", "limSl"].forEach(id =>
-    $(id).oninput = () => { tuneLabels(); paintRange($(id)); tuneChanged(); });
+  document.querySelectorAll("[data-wb]").forEach(b => b.onclick = () => mut(api("wb_nudge", b.dataset.wb)));
+  ["grSl", "ggSl", "gbSl", "gamSl", "tmpSl", "satSl", "limSl"].forEach(id => $(id).oninput = () => { tuneLabels(); paintRange($(id)); tuneChanged(); });
   $("ordSel").onchange = tuneChanged;
   bindSwitch($("calEn"), () => tuneChanged());
   $("tpApply").onclick = () => {
@@ -957,12 +1109,17 @@ function bind() {
   $("tpDel").onclick = async () => {
     const n = $("tuneProfSel").value;
     if (!n) return toast("No profile selected", "err");
-    if (await askConfirm("Delete profile", `Delete “${n}”?`))
-      mut(api("tune_prof_delete", n)).then(() => toast("Profile deleted"));
+    if (await askConfirm("Delete profile", `Delete “${n}”?`)) mut(api("tune_prof_delete", n)).then(() => toast("Profile deleted"));
   };
 
   // modes
-  $("modeSearch").oninput = debounce(renderModes, 120);
+  $("modeSearch").oninput = debounce(e => { modeFilter = e.target.value; renderModes(); }, 120);
+  $("randomMode").onclick = () => {
+    const names = S.mode_names || [];
+    if (!names.length) return;
+    const i = Math.floor(Math.random() * names.length);
+    mut(api("send_mode", i)).then(() => { renderModes(); toast(`Effect: ${names[i]}`); });
+  };
   $("spdSl").oninput = () => { $("spdVal").textContent = $("spdSl").value; paintRange($("spdSl")); };
   $("spdSl").onchange = () => mut(api("send_speed", +$("spdSl").value));
   $("spdSend").onclick = () => mut(api("send_speed", +$("spdSl").value)).then(() => toast("Speed sent"));
@@ -979,16 +1136,27 @@ function bind() {
     if (S.ambi_running) api("ambi_stop").then(() => toast("Ambilight stopped"));
     else api("ambi_start").then(() => toast("Ambilight starting"));
   };
+  $("ambiBtn2").onclick = () => $("ambiBtn").click();
+  document.querySelectorAll("[data-quick-ambi]").forEach(b => b.onclick = async () => {
+    const name = b.dataset.quickAmbi;
+    const st = await api("ambi_preset", name);
+    if (st && st.cfg) applyState(st, { markDirty: true });
+    if (!(S && S.ambi_running)) api("ambi_start");
+    toast(`Ambilight: ${name}`);
+  });
   bindSwitch($("ambiAuto"), on => mut(api("ambi_auto", on)));
   bindSwitch($("ambiXf"), () => ambiChanged());
   bindSwitch($("ambiDx"), () => ambiChanged());
+  bindSwitch($("ambiWfOn"), on => {
+    $("aWf").value = on ? Math.max(20, +$("aWf").value || 40) : 0;
+    ambiLabels(); paintRange($("aWf")); ambiChanged();
+  });
   $("ambiModeSeg").querySelectorAll("button").forEach(b => b.onclick = () => {
     ambiMode = b.dataset.m;
     $("ambiModeSeg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
     ambiChanged();
   });
-  ["aFps", "aSm", "aBri", "aMd", "aWf", "aIv"].forEach(id =>
-    $(id).oninput = () => { ambiLabels(); paintRange($(id)); ambiChanged(); });
+  ["aFps", "aSm", "aBri", "aMd", "aWf", "aIv"].forEach(id => $(id).oninput = () => { ambiLabels(); paintRange($(id)); ambiChanged(); });
   ["ambiMon", "ambiSample"].forEach(id => $(id).onchange = ambiChanged);
   $("acApply").onclick = () => {
     const n = $("ambiCustomSel").value;
@@ -1008,36 +1176,49 @@ function bind() {
   $("acDel").onclick = async () => {
     const n = $("ambiCustomSel").value;
     if (!n) return toast("No preset selected", "err");
-    if (await askConfirm("Delete preset", `Delete “${n}”?`))
-      mut(api("ambi_custom_delete", n)).then(() => toast("Preset deleted"));
+    if (await askConfirm("Delete preset", `Delete “${n}”?`)) mut(api("ambi_custom_delete", n)).then(() => toast("Preset deleted"));
   };
 
   // settings
-  bindSwitch($("stStartup"), on => api("set_startup", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stTask"), on => api("set_task", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stMinimized"), on => api("set_pref", "start_minimized", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stBtAuto"), on => api("set_pref", "bt_on_startup", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stDyn"), on => api("set_dyn", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stAutoConn"), on => api("set_pref", "auto_connect", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stAutoRe"), on => api("set_pref", "auto_reconnect", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stSyncTime"), on => api("set_pref", "sync_time_on_startup", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stQuit"), on => api("set_pref", "quit_on_close", on).then(st => { if (st && st.cfg) applyState(st); }));
-  bindSwitch($("stMotion"), on => api("set_pref", "reduce_motion", on).then(st => { if (st && st.cfg) applyState(st); }));
+  bindSwitch($("stStartup"), on => api("set_startup", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stTask"), on => api("set_task", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stMinimized"), on => api("set_pref", "start_minimized", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stBtAuto"), on => api("set_pref", "bt_on_startup", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stDyn"), on => api("set_dyn", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stAutoConn"), on => api("set_pref", "auto_connect", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stAutoRe"), on => api("set_pref", "auto_reconnect", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stSyncTime"), on => api("set_pref", "sync_time_on_startup", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stQuit"), on => api("set_pref", "quit_on_close", on).then(st => st && st.cfg && applyState(st)));
+  bindSwitch($("stMotion"), on => api("set_pref", "reduce_motion", on).then(st => st && st.cfg && applyState(st)));
+  $("themeLight").onclick = () => applyTheme("light");
+  $("themeDark").onclick = () => applyTheme("dark");
   $("btRefresh").onclick = () => api("bt_refresh");
   $("btOn").onclick = () => { api("bt_enable"); toast("Trying to enable Bluetooth"); };
   $("btSettings").onclick = () => api("bt_settings");
   $("cfgOpen").onclick = () => api("open_config_folder");
 
-  // keyboard focus: paint ranges on load
-  paintAll();
+  bindWheel();
 }
 
-/* ────────────────────────────── boot ────────────────────────────── */
+/* keyboard */
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openCmdk(); return; }
+  if (e.key === "Escape") {
+    if ($("cmdk").classList.contains("on")) { closeCmdk(); return; }
+    if ($("modalWrap").classList.contains("on")) { dismissModal(); return; }
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); doSave(); }
+  if (e.altKey && e.key >= "1" && e.key <= "7") { e.preventDefault(); showPage(PAGES[+e.key - 1]); }
+});
+
+/* ─────────────────────────── boot ─────────────────────────── */
 async function boot() {
   if (booted) return;
   if (!(window.pywebview && window.pywebview.api)) return;
   booted = true;
-  applyTheme(theme, false);
+  initTabs();
+  drawWheel();
+  applyTheme(localStorage.getItem("elf.theme") || "light", false);
   bind();
   try {
     const st = await api("get_state");
@@ -1057,7 +1238,6 @@ async function boot() {
     toast("Failed to load state", "err");
   }
 }
-
 window.addEventListener("pywebviewready", boot);
 window.addEventListener("DOMContentLoaded", () => setTimeout(boot, 250));
 (function wait() {

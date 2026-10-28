@@ -7,9 +7,10 @@ Modern Windows control for BLE LED strips — colors, effects, schedules, and re
 ## Features
 
 - **Devices** — BLE scan/connect, named groups, auto-connect and auto-reconnect on startup.
-- **Colors** — color well with hex/RGB/HSL, HSL + RGB sliders, 24 presets, recent colors, live-send while dragging.
+- **Colors** — interactive HSV wheel, eyedropper, harmony swatches, hex/RGB/HSL, 24 presets, scenes, live-send while dragging.
 - **Calibration** — guided white-balance helper, per-channel gains, gamma, temperature, saturation/ceiling, channel order, per-primary matrix calibration with live preview, and named profiles.
-- **Effects** — 29 built-in strip effects with searchable library, brightness and speed control.
+- **Effects** — 29 built-in strip effects with searchable categories, brightness and speed control.
+- **Command palette** — `Ctrl+K` to jump to any page, run actions, or apply presets; `Ctrl+S` saves, `Alt+1–7` switches pages.
 - **Schedule** — on-board strip timers plus PC-side schedules (power, color, mode).
 - **Ambilight** — screen-sync lighting with center/full capture, average/dominant/vibrant/brightest sampling, exact-duration crossfade (0–10 s), built-in and custom presets, and an idle eco mode. Capture runs at 5 Hz in a background thread with a capture-free fade loop, so Windows stays smooth while it runs.
 - **Settings** — launch at startup, Bluetooth helpers, system-tray behavior, and a light/dark theme toggle.
