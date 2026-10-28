@@ -7,12 +7,12 @@ Modern Windows control for BLE LED strips — colors, effects, schedules, and re
 ## Features
 
 - **Devices** — BLE scan/connect, named groups, auto-connect and auto-reconnect on startup.
-- **Colors** — HSV wheel, HSL + RGB sliders, hex input, 24 presets, recent colors, live-send while dragging.
-- **Tune** — per-channel R/G/B sliders, gain, gamma, temperature, channel order, per-primary matrix calibration with live preview.
-- **Modes** — 29 built-in strip effects with brightness and speed control.
-- **Timer** — on-board strip timers plus PC-side schedules (power, color, mode).
-- **Ambilight** — screen-sync lighting with center/full capture, average/dominant/vibrant/brightest sampling, exact-duration crossfade (0–10 s), Movie/Game/Chill/Party presets, and an idle eco mode. Capture runs at 5 Hz in a background thread with a capture-free fade loop, so Windows stays smooth while it runs.
-- **Setup** — launch at startup, Bluetooth helpers, system-tray behavior (close minimizes to tray).
+- **Colors** — color well with hex/RGB/HSL, HSL + RGB sliders, 24 presets, recent colors, live-send while dragging.
+- **Calibration** — guided white-balance helper, per-channel gains, gamma, temperature, saturation/ceiling, channel order, per-primary matrix calibration with live preview, and named profiles.
+- **Effects** — 29 built-in strip effects with searchable library, brightness and speed control.
+- **Schedule** — on-board strip timers plus PC-side schedules (power, color, mode).
+- **Ambilight** — screen-sync lighting with center/full capture, average/dominant/vibrant/brightest sampling, exact-duration crossfade (0–10 s), built-in and custom presets, and an idle eco mode. Capture runs at 5 Hz in a background thread with a capture-free fade loop, so Windows stays smooth while it runs.
+- **Settings** — launch at startup, Bluetooth helpers, system-tray behavior, and a light/dark theme toggle.
 - **Windows Dynamic Lighting (experimental)** — mirror the strip color to PC gear (motherboard / RAM / keyboard / mouse) via the LampArray API. Enable in Setup. One app drives each lamp, so yield lighting in vendor apps first (e.g. G Hub: enable its Windows Dynamic Lighting support) — no need to close them.
 
 Edits are staged until you press **Save** (sidebar, or `Ctrl+S`). Switching tabs or closing with unsaved changes offers Save / Discard / Cancel, and Discard restores the strip's last saved state.

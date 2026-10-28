@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import json
+import os
 import sys
 import threading
 import time
@@ -16,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "Elf-Ambilight"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 from protocol import (
     MODES, pkt_power, pkt_brightness, pkt_color_static, pkt_mode,
@@ -950,6 +951,13 @@ class Api:
                 _B().log(f"Live send {'ON' if val else 'OFF'}.")
         return _B().get_state()
 
+    def set_theme(self, name):
+        """Persist the UI theme immediately (not a staged setting)."""
+        name = "dark" if str(name).lower() == "dark" else "light"
+        _B().cfg.ui_theme = name
+        _B()._save_keys({"ui_theme": name})
+        return {"theme": name}
+
     # ── tune ──
     def tune_set(self, kind, payload):
         c = _B().cfg
@@ -1434,6 +1442,43 @@ def main():
         hidden=hidden,
     )
     back.window = win
+    selftest = "--selftest" in sys.argv
+    if selftest:
+        def _selftest_write(payload: dict):
+            bases = [os.environ.get("LOCALAPPDATA"), os.environ.get("TEMP"),
+                     r"E:\RGB PC PORT"]
+            for base in bases:
+                if not base:
+                    continue
+                try:
+                    p = Path(base) / "elf_selftest.json"
+                    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                    return str(p)
+                except Exception:
+                    continue
+            return None
+
+        _selftest_write({"stage": "main reached", "version": APP_VERSION})
+
+        def _selftest():
+            try:
+                ok = False
+                for _ in range(120):
+                    if getattr(back, "_ui_booted", None):
+                        ok = True
+                        break
+                    time.sleep(0.5)
+                _selftest_write({
+                    "stage": "finished",
+                    "ok": ok,
+                    "ui": getattr(back, "_ui_booted", None),
+                    "version": APP_VERSION,
+                    "webui": _webui_file("index.html"),
+                    "private_mode": False,
+                })
+            finally:
+                back.begin_quit(force=True)
+        threading.Thread(target=_selftest, daemon=True).start()
 
     def on_closing():
         # close → tray unless user chose quit-on-close

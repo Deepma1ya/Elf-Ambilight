@@ -2,7 +2,8 @@
 settings shortcut, and error sniffing for 'BT is off' conditions."""
 from __future__ import annotations
 import os
-import subprocess
+
+from proc import run_hidden
 
 BT_OFF_HINTS = (
     "turned off", "radio", "powered off", "power off", "not powered",
@@ -16,13 +17,8 @@ def looks_like_bt_off(err: Exception | str) -> bool:
     return any(h in msg for h in BT_OFF_HINTS)
 
 
-def _run_hidden(args: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
-    kw: dict = {"capture_output": True, "text": True, "timeout": timeout}
-    try:
-        kw["creationflags"] = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
-    except Exception:
-        pass
-    return subprocess.run(args, **kw)
+def _run_hidden(args: list[str], timeout: int = 15):
+    return run_hidden(args, timeout=timeout)
 
 
 def bt_service_running() -> bool | None:

@@ -1,7 +1,10 @@
 """Start-with-Windows via HKCU Run key (stdlib only)."""
 from __future__ import annotations
 import sys
+import time
 from pathlib import Path
+
+from proc import run_hidden
 
 try:
     import winreg
@@ -50,6 +53,8 @@ def set_startup(enabled: bool, minimized: bool = False):
 # the earliest real mechanism: an ONLOGON task with highest privileges and
 # no delay fires ahead of HKCU Run entries and other startup apps.
 TASK_NAME = "Elf-Ambilight"
+_TASK_CACHE_T: float = 0.0
+_TASK_CACHE_V: bool = False
 
 
 def _is_elevated() -> bool:
@@ -103,36 +108,45 @@ def relaunch_elevated_task(enable: bool):
         raise RuntimeError(f"elevation failed (code {int(rc or 0)})")
 
 
-def task_enabled() -> bool:
+def task_enabled(force: bool = False) -> bool:
+    """Cached task query — avoids spawning schtasks on every state refresh.
+
+    The UI polls state after each action; without this cache every click
+    would launch several console processes (hidden, but wasteful)."""
+    global _TASK_CACHE_T, _TASK_CACHE_V
+    now = time.monotonic()
+    if not force and (now - _TASK_CACHE_T) < 4.0:
+        return _TASK_CACHE_V
     try:
-        import subprocess
-        r = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME],
-                           capture_output=True, text=True, timeout=15)
-        return r.returncode == 0
+        r = run_hidden(["schtasks", "/Query", "/TN", TASK_NAME], timeout=15)
+        ok = r.returncode == 0
     except Exception:
-        return False
+        ok = False
+    _TASK_CACHE_T, _TASK_CACHE_V = now, ok
+    return ok
 
 
 def set_task(enabled: bool, minimized: bool = False):
     """Create/delete the ONLOGON scheduled task. Creating with /RL HIGHEST
     requires elevation — raises RuntimeError with a plain message if denied."""
-    import subprocess
+    global _TASK_CACHE_T
     if enabled:
         if not _is_elevated():
             raise RuntimeError(
                 "needs admin once: right-click the app → Run as administrator, "
                 "then enable High priority startup")
         cmd = _app_cmd(minimized)
-        r = subprocess.run(
+        r = run_hidden(
             ["schtasks", "/Create", "/TN", TASK_NAME, "/TR", cmd,
              "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"],
-            capture_output=True, text=True, timeout=30)
+            timeout=30)
         if r.returncode != 0:
             detail = (r.stderr or r.stdout or "").strip().splitlines()
             raise RuntimeError("; ".join(detail[:2]) or "schtasks create failed")
+        _TASK_CACHE_T, _TASK_CACHE_V = time.monotonic(), True
     else:
-        r = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-                           capture_output=True, text=True, timeout=30)
+        r = run_hidden(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], timeout=30)
         if r.returncode != 0 and "cannot find" not in (r.stderr or "").lower():
             detail = (r.stderr or r.stdout or "").strip().splitlines()
             raise RuntimeError("; ".join(detail[:2]) or "schtasks delete failed")
+        _TASK_CACHE_T, _TASK_CACHE_V = time.monotonic(), False

@@ -90,6 +90,7 @@ class Config:
     start_minimized: bool = False
     live_send: bool = True
     reduce_motion: bool = False  # True = instant transitions, no staged animation
+    ui_theme: str = "light"  # "light" | "dark" — persisted app theme
 
     # startup behavior
     bt_on_startup: bool = False
@@ -381,6 +382,8 @@ class Config:
                     c.ambi_monitor = max(0, int(c.ambi_monitor))
                 except Exception:
                     c.ambi_monitor = 1
+                if getattr(c, "ui_theme", "light") not in ("light", "dark"):
+                    c.ui_theme = "light"
                 try:
                     raw = c.ambi_custom_presets or {}
                     c.ambi_custom_presets = {

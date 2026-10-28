@@ -65,7 +65,7 @@ def _find_icon_path() -> Optional[str]:
 
 
 APP_NAME = "Elf-Ambilight"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 # ── Theme — Elf-Ambilight "Neon OLED" design system ──
