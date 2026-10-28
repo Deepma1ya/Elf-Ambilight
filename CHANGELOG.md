@@ -4,6 +4,33 @@ All notable changes to Elf-Ambilight are documented here.
 This project follows [Semantic Versioning](https://semver.org/) and the
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [1.4.0] — 2026-10-28
+
+### Added
+
+- **One-click FFmpeg in Studio** — downloads the official static Windows build
+  (~80 MB), installs `ffmpeg.exe` under
+  `%LOCALAPPDATA%\Elf-Ambilight\ffmpeg`, verifies it runs, and appends that
+  folder to your **user PATH**. No admin or UAC required, with live download
+  progress in the card. If FFmpeg is already on the PC but missing from PATH,
+  the same button becomes **Add to PATH**.
+
+### Fixed
+
+- **Studio animations sent no data to the strip.** `pkt_color_realtime` was
+  never imported in the backend, so every frame raised a silently swallowed
+  `NameError` and no BLE write was ever scheduled. Verified now by the frozen
+  self-test (`media_pkt`, `media_frames`, `media_send`).
+- **Studio output can no longer flood the BLE stack.** Frames are coalesced
+  through a single drain at ~30 Hz with at most one write in flight (latest
+  frame wins), matching Ambilight's proven pacing. 60 fps media stays smooth
+  instead of queueing minutes of stale packets; write failures are logged
+  instead of ignored.
+- **Now-playing preview lag.** Progress was pushed at 2 Hz and polled every
+  450 ms, so the preview jumped between colours. Ticks now run at ~12 Hz,
+  the bridge polls every ~90 ms while Studio is playing, only the preview
+  element is updated, and colours cross-fade over 90 ms.
+
 ## [1.3.0] — 2026-10-28
 
 The big one: the desktop window is now an embedded WebView2 interface, with
@@ -90,6 +117,7 @@ Studio playback, per-app Ambilight rules and a rebuilt color engine.
   lighting, colour calibration, schedules and a system-tray menu.
 - Single-file EXE, no installer required.
 
+[1.4.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.3.0
 [1.1.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.0.0

@@ -85,7 +85,7 @@
         <div class="mini-row"><span class="mini-key">Bluetooth</span><span class="mini-val" id="sideBt">—</span></div>
         <div class="mini-row"><span class="mini-key">Ambilight</span><span class="mini-val" id="sideAmbi">Idle</span></div>
       </div>
-      <div class="sidebar-version" id="sideVer">v1.3.0</div>
+      <div class="sidebar-version" id="sideVer">v1.4.0</div>
     </div>
   </aside>
 
@@ -602,7 +602,20 @@
                   <span class="list-s" id="mediaPath" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
                 </div>
                 <div class="hr" style="height:1px;background:var(--line);margin:12px 0"></div>
-                <p class="hint" style="margin:0">GIF/WebP play natively. Video (MP4, MKV, AVI, MOV, WebM) uses the system <b>ffmpeg</b> — install it and add it to PATH if video won’t start.</p>
+                <div class="switch-row" style="padding:0;align-items:flex-start;gap:12px">
+                  <div class="txt" style="min-width:0">
+                    <div class="t">Video decoder <span class="badge" id="ffmpegBadge">…</span></div>
+                    <div class="d" id="ffmpegInfo" style="overflow-wrap:anywhere">Checking FFmpeg…</div>
+                  </div>
+                  <button class="btn sm" id="ffmpegBtn" style="flex:0 0 auto">Install</button>
+                </div>
+                <div id="ffmpegProg" style="display:none;margin-top:10px">
+                  <div style="height:6px;border-radius:99px;background:var(--line);overflow:hidden">
+                    <div id="ffmpegBar" style="height:100%;width:0%;background:var(--brand);transition:width .15s linear"></div>
+                  </div>
+                  <div class="hint" id="ffmpegMsg" style="margin-top:6px">Starting…</div>
+                </div>
+                <p class="hint" style="margin:10px 0 0">GIF / WebP / APNG play natively. Video (MP4, MKV, AVI, MOV, WebM) needs FFmpeg — install it once above, no admin required.</p>
               </div>
             </div>
             <div class="card">
@@ -990,7 +1003,7 @@
             <div class="card">
               <div class="card-head"><div><h3>About</h3><div class="hint">Elf Ambilight</div></div></div>
               <div class="card-body">
-                <div class="field"><span class="field-label">Version</span><span class="field-val" id="appVersion" style="text-align:left">v1.3.0</span></div>
+                <div class="field"><span class="field-label">Version</span><span class="field-val" id="appVersion" style="text-align:left">v1.4.0</span></div>
                 <div class="field"><span class="field-label">Engine</span><span class="field-val" style="text-align:left;font-family:var(--sans)">WebView2 · Python</span></div>
                 <div class="field"><span class="field-label">Shortcuts</span><span class="field-val" style="text-align:left;font-family:var(--sans)">Ctrl K · Ctrl S · Alt 1–7</span></div>
               </div>

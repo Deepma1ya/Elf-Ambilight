@@ -17,11 +17,11 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "Elf-Ambilight"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 from protocol import (
-    MODES, pkt_power, pkt_brightness, pkt_color_static, pkt_mode,
-    pkt_mode_speed, pkt_single_color_w, pkt_cct, pkt_rgbw,
+    MODES, pkt_power, pkt_brightness, pkt_color_static, pkt_color_realtime,
+    pkt_mode, pkt_mode_speed, pkt_single_color_w, pkt_cct, pkt_rgbw,
     pkt_timing, pkt_system_time, pkt_pin_sequence,
 )
 from ble_manager import ElfBLE
@@ -30,6 +30,7 @@ from config import Config, CONFIG_PATH
 from bt_helper import bt_service_running, try_enable_bluetooth, open_bluetooth_settings
 import app_rules
 import media_player
+import ffmpeg_setup
 from startup_helper import (startup_enabled, set_startup, task_enabled,
                             is_elevated, relaunch_elevated_task,
                             enable_high_priority, read_task_result,
@@ -134,6 +135,14 @@ class Backend:
         self._rule_prev: set[int] = set()
         self._task_pending = None
         self.media = None
+        self._media_color = None
+        self._media_out_last = 0.0
+        self._media_out_busy = False
+        self._media_out_started = 0.0
+        self._media_err_t = 0.0
+        self.ffmpeg_installing = False
+        self.ffmpeg_pct = 0
+        self.ffmpeg_error = ""
         from collections import deque
         self._events = deque()
         self._monitors_cache = None
@@ -226,6 +235,17 @@ class Backend:
         self._dirty.add(page)
 
     # ── state snapshot for the frontend ──
+    def _ffmpeg_info(self) -> dict:
+        try:
+            info = ffmpeg_setup.info()
+        except Exception:
+            info = {"ready": False, "exe": "", "source": "", "on_path": False,
+                    "install_dir": ""}
+        info["installing"] = bool(self.ffmpeg_installing)
+        info["pct"] = int(self.ffmpeg_pct)
+        info["error"] = self.ffmpeg_error
+        return info
+
     def get_state(self) -> dict:
         try:
             mons = self._list_monitors()
@@ -269,6 +289,7 @@ class Backend:
                 "loop": bool(self.cfg.media_loop), "color": [0, 0, 0], "error": "",
             }),
             "media_last_file": self.cfg.media_last_file,
+            "ffmpeg": self._ffmpeg_info(),
             "monitors": mons,
             "mode_names": list(MODES),
             "recent": [list(c) for c in self.cfg.recent_colors],
@@ -461,39 +482,91 @@ class Backend:
             self._send_pkt(pkt_mode(m), f"sched '{name}' mode {m}")
 
     # ── Studio: continuous RGB playback ──
+    # `_media_send` is called at media FPS (up to 60). It only records the
+    # latest calibrated colour; a separate 33 Hz drain owns the BLE writes
+    # with at-most-one in flight, so frames can never queue up (the old code
+    # scheduled one coroutine per frame and the strip fell minutes behind).
+    _MEDIA_OUT_HZ = 30.0
+
     def _media_send(self, r: int, g: int, b: int):
         try:
-            c = self.cfg
-            cr, cg, cb = c.cal_apply(int(r), int(g), int(b))
+            cr, cg, cb = self.cfg.cal_apply(int(r), int(g), int(b))
         except Exception:
             cr, cg, cb = int(r), int(g), int(b)
-        try:
-            targets = self._targets()
-        except Exception:
-            targets = []
+        self._media_color = (cr, cg, cb)
+
+    def _media_write_fail(self, msg: str):
+        now = time.monotonic()
+        if now - self._media_err_t < 5.0:
+            return
+        self._media_err_t = now
+        self.log(f"Studio output failed: {str(msg)[:180]}")
+
+    def media_out_loop(self):
+        """Drain the newest Studio colour to BLE/PC lighting at a safe rate."""
         try:
             from dynlight import VIRTUAL_ADDR
         except Exception:
             VIRTUAL_ADDR = "dynlight://pc"
-        ble = [a for a in targets if a != VIRTUAL_ADDR and self.ble.is_connected(a)]
-        if ble:
+        period = 1.0 / max(1.0, self._MEDIA_OUT_HZ)
+        while not self._quitting:
             try:
-                asyncio.run_coroutine_threadsafe(
-                    self.ble.write_many(ble, pkt_color_realtime(cr, cg, cb), response=False),
-                    self.runner.loop)
+                color = self._media_color
+                now = time.monotonic()
+                if color is None or (now - self._media_out_last) < period:
+                    time.sleep(0.004)
+                    continue
+                if self._media_out_busy and (now - self._media_out_started) > 2.0:
+                    self._media_out_busy = False  # hung write: recover
+                self._media_out_last = now
+                targets = self._targets()
+                try:
+                    if self.dynlight is not None and VIRTUAL_ADDR in targets:
+                        self.dynlight.push(*color)
+                except Exception:
+                    pass
+                if self._media_out_busy:
+                    # Keep the newest colour; it is sent on the next tick.
+                    time.sleep(0.004)
+                    continue
+                ble = [a for a in targets
+                       if a != VIRTUAL_ADDR and self.ble.is_connected(a)]
+                if ble:
+                    self._media_out_busy = True
+                    self._media_out_started = now
+                    self._media_color = None
+                    try:
+                        fut = self.runner.submit(
+                            self.ble.write_many(ble, pkt_color_realtime(*color),
+                                                response=False))
+                    except Exception as e:
+                        self._media_out_busy = False
+                        self._media_write_fail(str(e))
+                        continue
+
+                    def _done(f, _self=self):
+                        _self._media_out_busy = False
+                        try:
+                            for addr, ok, err in f.result():
+                                if not ok:
+                                    _self._media_write_fail(f"{addr}: {err}")
+                        except Exception as e:
+                            _self._media_write_fail(str(e))
+
+                    fut.add_done_callback(_done)
+                else:
+                    self._media_color = None
+                time.sleep(0.004)
             except Exception:
-                pass
-        if VIRTUAL_ADDR in targets:
-            try:
-                if self.dynlight is not None:
-                    self.dynlight.push(cr, cg, cb)
-            except Exception:
-                pass
+                time.sleep(0.05)
 
     def media_start(self, mode: str, path: str = "", fps: float = 30.0,
                     brightness: int = 100, loop: bool = True, color=None):
         if self.ambilight.running:
             self.ambi_stop()
+        self._media_color = None
+        self._media_out_last = 0.0
+        self._media_out_busy = False
         try:
             base = tuple(int(x) for x in (color or [self.cfg.last_r, self.cfg.last_g, self.cfg.last_b])[:3])
         except Exception:
@@ -528,6 +601,7 @@ class Backend:
             self.log("Studio: playback stopped.")
         snap = self.media.snapshot() if self.media else None
         self.media = None
+        self._media_color = None
         try:
             self.push({"t": "media_state",
                        "media": snap or {"running": False}})
@@ -536,21 +610,53 @@ class Backend:
         return self.get_state()
 
     def media_tick_loop(self):
+        """Push Studio progress ~12x/s while playing (2 Hz looked frozen)."""
         while not self._quitting:
             try:
-                if self.media is not None:
-                    snap = self.media.snapshot()
+                m = self.media
+                if m is not None:
+                    snap = m.snapshot()
                     self.push({"t": "media_tick", "media": snap})
                     if not snap.get("running"):
                         self.log(f"Studio: finished {snap.get('name') or 'playback'}.")
                         self.media = None
+                        self._media_color = None
                         self.push({"t": "media_state", "media": snap})
+                    else:
+                        time.sleep(0.08)
+                        continue
             except Exception:
                 pass
-            for _ in range(5):
+            for _ in range(4):
                 if self._quitting:
                     break
                 time.sleep(0.1)
+
+    # ── FFmpeg helper (Studio video) ──
+    def _ffmpeg_progress(self, stage, pct, msg):
+        try:
+            self.ffmpeg_pct = max(0, int(pct))
+        except Exception:
+            self.ffmpeg_pct = 0
+        self.push({"t": "ffmpeg", "stage": stage, "pct": self.ffmpeg_pct,
+                   "msg": str(msg)[:200]})
+
+    def _ffmpeg_install_worker(self):
+        try:
+            res = ffmpeg_setup.download_and_install(self._ffmpeg_progress)
+            self.ffmpeg_error = ""
+            self.log(f"FFmpeg ready — {res.get('version') or 'installed'}.")
+        except Exception as e:
+            self.ffmpeg_error = str(e)[:300]
+            self.log(f"FFmpeg install failed: {self.ffmpeg_error}")
+            self._ffmpeg_progress("error", 0, self.ffmpeg_error)
+        finally:
+            self.ffmpeg_installing = False
+            self.ffmpeg_pct = 100 if not self.ffmpeg_error else 0
+            try:
+                self.push({"t": "state", "state": self.get_state()})
+            except Exception:
+                pass
 
     # ── ambilight lifecycle ──
     def apply_ambi_preset(self, name: str) -> bool:
@@ -1583,6 +1689,30 @@ class Api:
     def media_stop(self):
         return _B().media_stop()
 
+    # ── FFmpeg download/install ──
+    def ffmpeg_install(self):
+        b = _B()
+        if b.ffmpeg_installing:
+            return b.get_state()
+        b.ffmpeg_installing = True
+        b.ffmpeg_pct = 0
+        b.ffmpeg_error = ""
+        b.log("Downloading FFmpeg (about 80 MB) — one time only.")
+        threading.Thread(target=b._ffmpeg_install_worker, daemon=True).start()
+        return b.get_state()
+
+    def ffmpeg_add_path(self):
+        b = _B()
+        try:
+            info = ffmpeg_setup.add_existing_to_path()
+            if info and info.get("ready"):
+                b.log("FFmpeg folder added to your user PATH.")
+            else:
+                b.log("No FFmpeg found to add to PATH.")
+        except Exception as e:
+            b.log(f"Add to PATH: {e}")
+        return b.get_state()
+
     # ── per-app Ambilight rules ──
     def list_apps(self):
         try:
@@ -1976,8 +2106,27 @@ def main():
                 try:
                     import media_player
                     report["ffmpeg"] = bool(media_player.ffmpeg_path())
+                    got = []
+                    mp = media_player.MediaPlayer(lambda r, g, b: got.append((r, g, b)),
+                                                  lambda: [], base_color=(255, 255, 255))
+                    if mp.start("gen:pulse", fps=40, brightness=100):
+                        time.sleep(0.4)
+                        mp.stop()
+                        report["media_frames"] = len(got)
+                    else:
+                        report["media_error"] = mp.error or "generator did not start"
                 except Exception as e:
                     report["media_error"] = str(e)[:200]
+                try:
+                    # Catches a missing protocol import (Studio once published
+                    # zero packets because pkt_color_realtime was NameError'd
+                    # inside a swallowed exception).
+                    report["media_pkt"] = len(pkt_color_realtime(1, 2, 3))
+                    back._media_send(1, 2, 3)
+                    report["media_send"] = back._media_color is not None
+                    back._media_color = None  # never flash the strip during a test
+                except Exception as e:
+                    report["media_send_error"] = str(e)[:200]
                 try:
                     from startup_helper import task_enabled, startup_enabled, is_elevated
                     report["task_on"] = bool(task_enabled(force=True))
@@ -2014,6 +2163,7 @@ def main():
     threading.Thread(target=back.ambi_tick_loop, daemon=True).start()
     threading.Thread(target=back.app_rule_loop, daemon=True).start()
     threading.Thread(target=back.media_tick_loop, daemon=True).start()
+    threading.Thread(target=back.media_out_loop, daemon=True).start()
     if back.dynlight.enabled:
         threading.Timer(6.0, lambda: back.dynlight.request_refresh()).start()
     if back.cfg.auto_connect and back.cfg.last_addresses:

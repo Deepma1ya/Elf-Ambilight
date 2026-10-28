@@ -882,3 +882,7 @@ body.reduce .card::after { display: none; }
   .cmd-trigger { min-width: 0; }
   .cmd-trigger .grow, .cmd-trigger kbd { display: none; }
 }
+
+/* Studio now-playing preview: blend 12 Hz updates into a smooth wash */
+#mediaPrev { transition: background-color 90ms linear; }
+

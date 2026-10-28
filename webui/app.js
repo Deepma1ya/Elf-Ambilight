@@ -1061,8 +1061,17 @@ function mediaUI(m) {
     }
     $("mediaStat").textContent = stat;
   }
+  mediaTick(m);
+}
+/* Fast path: called ~12x/s while playing — only touch the preview. */
+function mediaTick(m) {
+  if (!m) return;
   if ($("mediaFrames")) $("mediaFrames").textContent = `${m.frames || 0} frames`;
-  if ($("mediaPrev")) $("mediaPrev").style.background = hx(...(m.color || [0, 0, 0]));
+  const prev = $("mediaPrev");
+  if (prev) {
+    const c = m.color || [0, 0, 0];
+    prev.style.backgroundColor = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  }
 }
 function renderStudio() {
   const m = S.media || {};
@@ -1090,6 +1099,44 @@ function renderStudio() {
     });
   }
   mediaUI(m);
+  renderFfmpeg();
+}
+function renderFfmpeg() {
+  const f = S.ffmpeg || {};
+  const badge = $("ffmpegBadge");
+  if (!badge) return;
+  const inst = !!f.installing;
+  const pct = Math.max(0, Math.min(100, f.pct || 0));
+  badge.textContent = inst ? (pct > 0 ? pct + "%" : "Starting") : (f.ready ? "Ready" : "Missing");
+  badge.className = "badge " + (inst || !f.ready ? "warn" : "ok");
+  $("ffmpegProg").style.display = inst ? "block" : "none";
+  const btn = $("ffmpegBtn");
+  if (inst) {
+    btn.disabled = true;
+    btn.textContent = "Installing…";
+    btn.style.display = "";
+    $("ffmpegBar").style.width = Math.max(2, pct) + "%";
+    $("ffmpegMsg").textContent = f.msg || "Downloading…";
+    $("ffmpegInfo").textContent =
+      "Downloading an official static build — keep this window open.";
+    return;
+  }
+  btn.disabled = false;
+  if (f.ready) {
+    const src = f.source === "app" ? "Installed by Elf-Ambilight" : "Found on this PC";
+    $("ffmpegInfo").textContent = `${src}${f.exe ? " · " + f.exe : ""}`
+      + (f.on_path ? " · on PATH" : " · not on PATH");
+    btn.style.display = f.on_path ? "none" : "";
+    btn.textContent = "Add to PATH";
+  } else {
+    btn.style.display = "";
+    btn.textContent = "Install FFmpeg";
+    $("ffmpegInfo").textContent = f.error
+      ? "Last attempt failed: " + f.error
+      : (f.install_dir
+          ? `Downloads the official build (~80 MB) to ${f.install_dir} and adds it to your user PATH. No admin needed.`
+          : "Downloads the official build (~80 MB) and adds it to your user PATH.");
+  }
 }
 function startMedia(mode, path) {
   const fps = +$("mediaFps").value;
@@ -1444,10 +1491,19 @@ function handleEvent(evt) {
       case "ambi_state":
         S.ambi_running = evt.running; renderChrome(); renderAmbi(); break;
       case "media_tick":
-        if (evt.media) { S.media = evt.media; mediaUI(evt.media); }
+        if (evt.media) { S.media = evt.media; mediaTick(evt.media); }
         break;
       case "media_state":
         if (evt.media) { S.media = evt.media; renderStudio(); }
+        break;
+      case "ffmpeg":
+        if (!S.ffmpeg) S.ffmpeg = {};
+        S.ffmpeg.installing = evt.stage !== "done" && evt.stage !== "error";
+        S.ffmpeg.pct = evt.pct || 0;
+        S.ffmpeg.msg = evt.msg || "";
+        renderFfmpeg();
+        if (evt.stage === "done") toast("FFmpeg installed");
+        else if (evt.stage === "error") toast(evt.msg || "FFmpeg install failed", "err");
         break;
       case "state": applyState(evt.state); break;
     }
@@ -1461,7 +1517,8 @@ async function pollOnce() {
       (list || []).forEach(handleEvent);
     }
   } catch (e) { /* bridge busy or closing */ }
-  pollTimer = setTimeout(pollOnce, document.hidden ? 1500 : 450);
+  const fast = !document.hidden && page === "studio" && S.media && S.media.running;
+  pollTimer = setTimeout(pollOnce, document.hidden ? 1500 : (fast ? 90 : 450));
 }
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && pollTimer) {
@@ -1640,6 +1697,20 @@ function bind() {
     if (st && st.cfg) applyState(st);
     toast("Playback stopped");
   });
+  $("ffmpegBtn").onclick = async () => {
+    const f = S.ffmpeg || {};
+    if (f.ready) {
+      api("ffmpeg_add_path").then(st => {
+        if (st && st.cfg) applyState(st);
+        toast("Added to user PATH");
+      });
+      return;
+    }
+    const ok = await askConfirm("Install FFmpeg",
+      "Download the official FFmpeg build (about 80 MB), install it for your user account and add it to PATH? No admin rights are needed.");
+    if (!ok) return;
+    api("ffmpeg_install").then(st => { if (st && st.cfg) applyState(st); });
+  };
   $("mediaFps").oninput = () => {
     $("mediaFpsVal").textContent = Math.round(+$("mediaFps").value);
     paintRange($("mediaFps"));

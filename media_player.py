@@ -34,6 +34,14 @@ GEN_LABELS = {
 
 
 def ffmpeg_path() -> str | None:
+    """Our per-user install first, then PATH/common folders, then imageio."""
+    try:
+        import ffmpeg_setup  # type: ignore
+        p, _ = ffmpeg_setup.find_ffmpeg()
+        if p:
+            return p
+    except Exception:
+        pass
     try:
         import imageio_ffmpeg  # type: ignore
         p = imageio_ffmpeg.get_ffmpeg_exe()
