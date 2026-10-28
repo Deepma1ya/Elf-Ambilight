@@ -1030,15 +1030,28 @@ function renderTiming() {
 let pickedFile = "";
 const MEDIA_GENS = [
   ["rainbow", "Rainbow sweep", "Full-spectrum rotation"],
+  ["wave", "Rainbow wave", "Hue drift with a soft ripple"],
   ["pulse", "Breathing pulse", "Fades the colour selected in Colors"],
   ["chase", "Colour chase", "Pulsing version of the current colour"],
+  ["aurora", "Aurora drift", "Slow green-violet curtains"],
+  ["twinkle", "Twinkle sparks", "Random warm sparkles"],
   ["fire", "Fire flicker", "Warm, irregular flicker"],
+  ["candle", "Candle glow", "Soft, warm candlelight"],
   ["ocean", "Ocean wave", "Slow blue swell"],
+  ["police", "Police lights", "Red/blue emergency alternation"],
+  ["lightning", "Lightning storm", "Dark sky with white strikes"],
+  ["heartbeat", "Heartbeat", "Double red thump"],
+  ["disco", "Disco party", "Random colours on the beat"],
+  ["sunrise", "Sunrise", "Deep red to warm white"],
 ];
 function baseName(p) {
   if (!p) return "";
   const parts = String(p).split(/[\\/]/);
   return parts[parts.length - 1] || p;
+}
+function fmtSpeed(v) {
+  const n = Math.round((+v || 1) * 100) / 100;
+  return (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, "")) + "×";
 }
 function mediaUI(m) {
   if (!m) return;
@@ -1054,7 +1067,9 @@ function mediaUI(m) {
   if ($("mediaStat")) {
     let stat = "—";
     if (running) {
-      stat = (m.mode || "").startsWith("gen:") ? "Generated animation" : "File";
+      const gen = (m.mode || "").startsWith("gen:");
+      stat = gen ? "Generated animation" : "File";
+      if (gen) stat += ` · ${fmtSpeed(m.speed)}`;
       stat += ` · ${Math.round(m.fps || 30)} fps · ${m.brightness || 100}%`;
     } else if (m.error) {
       stat = m.error;
@@ -1077,12 +1092,15 @@ function renderStudio() {
   const m = S.media || {};
   const fps = m.fps || S.cfg.media_fps || 30;
   const bri = m.brightness || S.cfg.media_brightness || 100;
+  const spd = m.speed || S.cfg.media_speed || 1;
   $("mediaFps").value = fps;
   $("mediaBri").value = bri;
+  $("mediaSpeed").value = spd;
   $("mediaFpsVal").textContent = Math.round(fps);
   $("mediaBriVal").textContent = Math.round(bri) + "%";
+  $("mediaSpeedVal").textContent = fmtSpeed(spd);
   setSwitch($("mediaLoop"), m.loop !== undefined ? !!m.loop : !!S.cfg.media_loop);
-  paintRange($("mediaFps")); paintRange($("mediaBri"));
+  paintRange($("mediaFps")); paintRange($("mediaBri")); paintRange($("mediaSpeed"));
   $("mediaPath").textContent = S.media_last_file ? baseName(S.media_last_file) : "No file selected";
   $("mediaPath").title = S.media_last_file || "";
   if (!pickedFile) pickedFile = S.media_last_file || "";
@@ -1141,8 +1159,9 @@ function renderFfmpeg() {
 function startMedia(mode, path) {
   const fps = +$("mediaFps").value;
   const bri = +$("mediaBri").value;
+  const spd = +$("mediaSpeed").value;
   const loop = $("mediaLoop").getAttribute("aria-checked") === "true";
-  api("media_start", mode, path || "", fps, bri, loop, [color.r, color.g, color.b])
+  api("media_start", mode, path || "", fps, bri, loop, [color.r, color.g, color.b], spd)
     .then(res => {
       if (res && res.state) applyState(res.state);
       if (res && res.ok) toast(mode === "file" ? "Playing file" : "Animation started");
@@ -1150,6 +1169,16 @@ function startMedia(mode, path) {
     })
     .catch(() => toast("Could not start playback", "err"));
 }
+const tuneMedia = debounce(() => {
+  if (!$("mediaSpeed")) return;
+  const fps = +$("mediaFps").value;
+  const bri = +$("mediaBri").value;
+  const spd = +$("mediaSpeed").value;
+  S.cfg.media_fps = fps; S.cfg.media_brightness = bri; S.cfg.media_speed = spd;
+  api("media_tune", fps, bri, spd).then(res => {
+    if (res && res.media) S.media = res.media;
+  }).catch(() => {});
+}, 160);
 
 /* ─────────────────────────── ambilight ─────────────────────────── */
 function renderAmbi() {
@@ -1714,10 +1743,17 @@ function bind() {
   $("mediaFps").oninput = () => {
     $("mediaFpsVal").textContent = Math.round(+$("mediaFps").value);
     paintRange($("mediaFps"));
+    tuneMedia();
   };
   $("mediaBri").oninput = () => {
     $("mediaBriVal").textContent = Math.round(+$("mediaBri").value) + "%";
     paintRange($("mediaBri"));
+    tuneMedia();
+  };
+  $("mediaSpeed").oninput = () => {
+    $("mediaSpeedVal").textContent = fmtSpeed($("mediaSpeed").value);
+    paintRange($("mediaSpeed"));
+    tuneMedia();
   };
   bindSwitch($("mediaLoop"), () => {});
 

@@ -122,6 +122,7 @@ class Config:
     # Studio media playback prefs
     media_fps: float = 30.0
     media_brightness: int = 100
+    media_speed: float = 1.0
     media_loop: bool = True
     media_last_file: str = ""
     ambi_white_floor: int = 0  # 0..100 min saturation % to show color; duller scenes show white. 0 = off
@@ -430,6 +431,10 @@ class Config:
                     c.media_brightness = max(1, min(100, int(c.media_brightness)))
                 except Exception:
                     c.media_brightness = 100
+                try:
+                    c.media_speed = max(0.25, min(3.0, float(c.media_speed)))
+                except Exception:
+                    c.media_speed = 1.0
                 c.media_loop = bool(getattr(c, "media_loop", True))
                 c.media_last_file = str(getattr(c, "media_last_file", ""))[:400]
                 try:

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "Elf-Ambilight"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 from protocol import (
     MODES, pkt_power, pkt_brightness, pkt_color_static, pkt_color_realtime,
@@ -286,6 +286,7 @@ class Backend:
                 "running": False, "mode": "", "name": "", "frames": 0,
                 "fps": float(self.cfg.media_fps),
                 "brightness": int(self.cfg.media_brightness),
+                "speed": float(self.cfg.media_speed),
                 "loop": bool(self.cfg.media_loop), "color": [0, 0, 0], "error": "",
             }),
             "media_last_file": self.cfg.media_last_file,
@@ -561,7 +562,8 @@ class Backend:
                 time.sleep(0.05)
 
     def media_start(self, mode: str, path: str = "", fps: float = 30.0,
-                    brightness: int = 100, loop: bool = True, color=None):
+                    brightness: int = 100, loop: bool = True, color=None,
+                    speed: float = 1.0):
         if self.ambilight.running:
             self.ambi_stop()
         self._media_color = None
@@ -572,7 +574,7 @@ class Backend:
         except Exception:
             base = (255, 255, 255)
         mp = media_player.MediaPlayer(self._media_send, self._targets, base_color=base)
-        if not mp.start(mode, path, fps, brightness, loop, base):
+        if not mp.start(mode, path, fps, brightness, loop, base, speed):
             return {"ok": False, "error": mp.error or "Could not start playback.",
                     "state": self.get_state()}
         if self.media is not None:
@@ -581,12 +583,14 @@ class Backend:
         c = self.cfg
         c.media_fps = float(mp.fps)
         c.media_brightness = int(mp.brightness)
+        c.media_speed = float(mp.speed)
         c.media_loop = bool(mp.loop)
         if mode == "file":
             c.media_last_file = path
         self._save_keys({
             "media_fps": c.media_fps, "media_brightness": c.media_brightness,
-            "media_loop": c.media_loop, "media_last_file": c.media_last_file,
+            "media_speed": c.media_speed, "media_loop": c.media_loop,
+            "media_last_file": c.media_last_file,
         })
         self.log(f"Studio: playing {mp.name} at {mp.fps:.0f}fps.")
         try:
@@ -608,6 +612,28 @@ class Backend:
         except Exception:
             pass
         return self.get_state()
+
+    def media_tune(self, fps=None, brightness=None, speed=None):
+        """Live sliders: persist prefs and update the running player."""
+        c = self.cfg
+        try:
+            if fps is not None:
+                c.media_fps = max(1.0, min(60.0, float(fps)))
+            if brightness is not None:
+                c.media_brightness = max(1, min(100, int(brightness)))
+            if speed is not None:
+                c.media_speed = max(0.25, min(3.0, float(speed)))
+            self._save_keys({
+                "media_fps": c.media_fps,
+                "media_brightness": c.media_brightness,
+                "media_speed": c.media_speed,
+            })
+        except Exception:
+            pass
+        if self.media is not None:
+            self.media.set_tuning(fps=fps, brightness=brightness, speed=speed)
+        return {"ok": True,
+                "media": (self.media.snapshot() if self.media is not None else None)}
 
     def media_tick_loop(self):
         """Push Studio progress ~12x/s while playing (2 Hz looked frozen)."""
@@ -1682,9 +1708,13 @@ class Api:
             _B().log(f"File picker failed: {e}")
         return ""
 
-    def media_start(self, mode, path="", fps=30, brightness=100, loop=True, color=None):
-        res = _B().media_start(mode, path, fps, brightness, loop, color)
+    def media_start(self, mode, path="", fps=30, brightness=100, loop=True,
+                    color=None, speed=1.0):
+        res = _B().media_start(mode, path, fps, brightness, loop, color, speed)
         return res
+
+    def media_tune(self, fps=None, brightness=None, speed=None):
+        return _B().media_tune(fps, brightness, speed)
 
     def media_stop(self):
         return _B().media_stop()
@@ -2106,6 +2136,7 @@ def main():
                 try:
                     import media_player
                     report["ffmpeg"] = bool(media_player.ffmpeg_path())
+                    report["media_gens"] = len(media_player.GEN_NAMES)
                     got = []
                     mp = media_player.MediaPlayer(lambda r, g, b: got.append((r, g, b)),
                                                   lambda: [], base_color=(255, 255, 255))

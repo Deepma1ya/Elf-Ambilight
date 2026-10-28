@@ -4,6 +4,24 @@ All notable changes to Elf-Ambilight are documented here.
 This project follows [Semantic Versioning](https://semver.org/) and the
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [1.5.0] — 2026-10-28
+
+### Added
+
+- **Nine more Studio animations** — 14 in total: Rainbow wave, Aurora drift,
+  Twinkle sparks, Candle glow, Police lights, Lightning storm, Heartbeat,
+  Disco party and Sunrise join the original five.
+- **Animation speed slider** (0.25×–3×). Tempo is scaled live and is
+  independent of FPS. FPS and brightness now also apply live while playing,
+  and all three persist between launches.
+- Playback controls moved below the Studio tabs, so they are visible on both
+  the File and Animations tabs.
+
+### Changed
+
+- Animation timing uses real elapsed time, so effects keep the same tempo at
+  any FPS, including after changing speed mid-playback.
+
 ## [1.4.0] — 2026-10-28
 
 ### Added
@@ -117,6 +135,7 @@ Studio playback, per-app Ambilight rules and a rebuilt color engine.
   lighting, colour calibration, schedules and a system-tray menu.
 - Single-file EXE, no installer required.
 
+[1.5.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.5.0
 [1.4.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.3.0
 [1.1.0]: https://github.com/Deepma1ya/Elf-Ambilight/releases/tag/v1.1.0

@@ -23,14 +23,37 @@ FRAME_BYTES = FRAME_W * FRAME_H * 3
 IMAGE_EXT = (".gif", ".webp", ".apng", ".png", ".jpg", ".jpeg", ".bmp")
 VIDEO_EXT = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".flv", ".wmv")
 
-GEN_NAMES = ("rainbow", "pulse", "chase", "fire", "ocean")
+GEN_NAMES = (
+    "rainbow", "wave", "pulse", "chase", "aurora", "twinkle", "fire",
+    "candle", "ocean", "police", "lightning", "heartbeat", "disco", "sunrise",
+)
 GEN_LABELS = {
     "rainbow": "Rainbow sweep",
+    "wave": "Rainbow wave",
     "pulse": "Breathing pulse",
     "chase": "Colour chase",
+    "aurora": "Aurora drift",
+    "twinkle": "Twinkle sparks",
     "fire": "Fire flicker",
+    "candle": "Candle glow",
     "ocean": "Ocean wave",
+    "police": "Police lights",
+    "lightning": "Lightning storm",
+    "heartbeat": "Heartbeat",
+    "disco": "Disco party",
+    "sunrise": "Sunrise",
 }
+
+
+def _hsv(h: float, s: float = 1.0, v: float = 1.0) -> tuple[int, int, int]:
+    r, g, b = colorsys.hsv_to_rgb((h % 360.0) / 360.0,
+                                  max(0.0, min(1.0, s)), max(0.0, min(1.0, v)))
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+def _mix(rgb: tuple[int, int, int], k: float) -> tuple[int, int, int]:
+    k = max(0.0, min(1.0, k))
+    return (int(rgb[0] * k), int(rgb[1] * k), int(rgb[2] * k))
 
 
 def ffmpeg_path() -> str | None:
@@ -83,6 +106,7 @@ class MediaPlayer:
         self.base_color = base_color
         self.fps = 30.0
         self.brightness = 100
+        self.speed = 1.0
         self.loop = True
         self.mode = ""
         self.name = ""
@@ -97,11 +121,12 @@ class MediaPlayer:
     # ---------- lifecycle ----------
     def start(self, mode: str, path: str = "", fps: float = 30.0,
               brightness: int = 100, loop: bool = True,
-              base_color=(255, 255, 255)) -> bool:
+              base_color=(255, 255, 255), speed: float = 1.0) -> bool:
         self.stop()
         self.mode = mode
         self.fps = max(1.0, min(60.0, float(fps)))
         self.brightness = max(1, min(100, int(brightness)))
+        self.speed = max(0.25, min(3.0, float(speed)))
         self.loop = bool(loop)
         self.base_color = base_color or (255, 255, 255)
         self.name = (GEN_LABELS.get(mode.replace("gen:", ""), "") if mode.startswith("gen:")
@@ -153,6 +178,18 @@ class MediaPlayer:
                 pass
         self._thread = None
 
+    def set_tuning(self, fps=None, brightness=None, speed=None):
+        """Live changes while playing (safe: plain attribute writes)."""
+        try:
+            if fps is not None:
+                self.fps = max(1.0, min(60.0, float(fps)))
+            if brightness is not None:
+                self.brightness = max(1, min(100, int(brightness)))
+            if speed is not None:
+                self.speed = max(0.25, min(3.0, float(speed)))
+        except Exception:
+            pass
+
     def snapshot(self) -> dict:
         return {
             "running": self.running,
@@ -161,6 +198,7 @@ class MediaPlayer:
             "frames": self.frames,
             "fps": self.fps,
             "brightness": self.brightness,
+            "speed": self.speed,
             "loop": self.loop,
             "color": list(self.last_color),
             "error": self.error,
@@ -173,7 +211,6 @@ class MediaPlayer:
                 src = self._file_frames()
             else:
                 src = self._gen_frames(self.mode.split(":", 1)[1])
-            period = 1.0 / self.fps
             while not self._stop.is_set():
                 t0 = time.monotonic()
                 try:
@@ -195,6 +232,7 @@ class MediaPlayer:
                 except Exception:
                     pass
                 dt = time.monotonic() - t0
+                period = 1.0 / max(1.0, self.fps)   # live FPS changes
                 self._stop.wait(max(0.0, period - dt))
         except Exception as e:
             self.error = str(e)
@@ -267,31 +305,86 @@ class MediaPlayer:
         return b"".join(chunks)
 
     def _gen_frames(self, name: str):
+        """Time-based animations. `speed` scales the effect tempo live and is
+        independent of FPS; brightness is applied per frame."""
         t = 0.0
-        dt = 1.0 / self.fps
+        last = time.monotonic()
+        spark = 0.0
+        flash = 0.0
         base = self.base_color
         while not self._stop.is_set():
+            now = time.monotonic()
+            step = now - last
+            last = now
+            if step <= 0.0 or step > 0.5:
+                step = 1.0 / max(1.0, self.fps)
+            t += step * max(0.05, float(self.speed))
+
             if name == "rainbow":
-                h = (t * 60.0) % 360.0
-                r, g, b = colorsys.hsv_to_rgb(h / 360.0, 1.0, 1.0)
-                rgb = (int(r * 255), int(g * 255), int(b * 255))
+                rgb = _hsv(t * 60.0, 1.0, 1.0)
+            elif name == "wave":
+                v = 0.55 + 0.45 * math.sin(t * 3.0)
+                rgb = _hsv(t * 28.0, 0.92, max(0.18, v))
             elif name == "pulse":
                 k = 0.25 + 0.75 * (0.5 + 0.5 * math.sin(t * 2.2))
-                rgb = (int(base[0] * k), int(base[1] * k), int(base[2] * k))
+                rgb = _mix(base, k)
             elif name == "chase":
                 k = 0.15 + 0.85 * (0.5 + 0.5 * math.sin(t * 4.0))
-                rgb = (int(base[0] * k), int(base[1] * k), int(base[2] * k))
+                rgb = _mix(base, k)
+            elif name == "aurora":
+                h = 150.0 + 55.0 * math.sin(t * 0.35) + 18.0 * math.sin(t * 0.9)
+                v = 0.62 + 0.38 * (0.5 + 0.5 * math.sin(t * 0.7 + 1.2))
+                rgb = _hsv(h, 0.88, v)
+            elif name == "twinkle":
+                spark = max(0.0, spark - step * 3.2)
+                if random.random() < step * 5.0:
+                    spark = 1.0
+                k = 0.06 + 0.94 * spark
+                rgb = (int(255 * k), int(238 * k), int(205 * k))
             elif name == "fire":
-                r = 255
-                g = 70 + int(90 * (0.5 + 0.5 * math.sin(t * 7.0 + random.random())))
+                g = 70 + int(90 * (0.5 + 0.5 * math.sin(t * 7.0 + random.random() * 6.28)))
                 b = 10 + int(25 * random.random())
-                rgb = (r, g, b)
+                rgb = (255, g, b)
+            elif name == "candle":
+                f = (0.72 + 0.16 * math.sin(t * 3.1)
+                     + 0.08 * math.sin(t * 8.7 + 1.3)
+                     + random.uniform(-0.05, 0.05))
+                k = max(0.35, min(1.0, f))
+                rgb = (255, int(150 * k), int(55 * k))
             elif name == "ocean":
-                h = (190 + 25 * math.sin(t * 1.3)) % 360
+                h = 190.0 + 25.0 * math.sin(t * 1.3)
                 v = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(t * 1.7))
-                r, g, b = colorsys.hsv_to_rgb(h / 360.0, 0.85, v)
-                rgb = (int(r * 255), int(g * 255), int(b * 255))
+                rgb = _hsv(h, 0.85, v)
+            elif name == "police":
+                phase = (t / 0.42) % 2.0
+                k = 0.35 + 0.65 * (0.5 + 0.5 * math.cos(phase * math.pi * 2.0))
+                rgb = ((int(255 * k), 0, int(30 * k)) if phase < 1.0
+                       else (int(10 * k), int(40 * k), int(255 * k)))
+            elif name == "lightning":
+                flash = max(0.0, flash - step * 6.0)
+                if random.random() < step * 1.6:
+                    flash = 1.0
+                k = min(1.0, flash)
+                rgb = (int(40 + 200 * k), int(55 + 190 * k), int(90 + 165 * k))
+            elif name == "heartbeat":
+                p = t % 1.0
+                k = 0.14
+                if p < 0.10:
+                    k = 1.0 - (p / 0.10) * 0.15
+                elif p < 0.18:
+                    k = 0.35
+                elif p < 0.30:
+                    k = 0.85 - ((p - 0.18) / 0.12) * 0.45
+                rgb = (int(255 * k), int(16 * k), int(28 * k))
+            elif name == "disco":
+                beat = int(t / 0.33)
+                rnd = random.Random(beat * 7919)
+                v = 0.75 + 0.25 * math.sin(t * 9.0)
+                rgb = _hsv(rnd.random() * 360.0, 1.0, max(0.4, v))
+            elif name == "sunrise":
+                cyc = (t / 12.0) % 1.0
+                rgb = _hsv(8.0 + 42.0 * cyc, max(0.05, 1.0 - 0.75 * cyc),
+                           0.35 + 0.65 * cyc)
             else:
                 rgb = base
             yield _scale(rgb, self.brightness)
-            t += dt

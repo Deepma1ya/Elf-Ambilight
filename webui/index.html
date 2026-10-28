@@ -85,7 +85,7 @@
         <div class="mini-row"><span class="mini-key">Bluetooth</span><span class="mini-val" id="sideBt">—</span></div>
         <div class="mini-row"><span class="mini-key">Ambilight</span><span class="mini-val" id="sideAmbi">Idle</span></div>
       </div>
-      <div class="sidebar-version" id="sideVer">v1.4.0</div>
+      <div class="sidebar-version" id="sideVer">v1.5.0</div>
     </div>
   </aside>
 
@@ -593,52 +593,54 @@
         </div>
 
         <div class="tabpanel on" data-panel="studio-main:file">
-          <div class="grid g2">
-            <div class="card">
-              <div class="card-head"><div><h3>Media file</h3><div class="hint">Video, GIF, WebP, APNG, or a still image.</div></div></div>
-              <div class="card-body">
-                <div class="field" style="gap:6px">
-                  <button class="btn primary" id="mediaPick"><svg><use href="#i-folder"/></svg>Choose file…</button>
-                  <span class="list-s" id="mediaPath" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
-                </div>
-                <div class="hr" style="height:1px;background:var(--line);margin:12px 0"></div>
-                <div class="switch-row" style="padding:0;align-items:flex-start;gap:12px">
-                  <div class="txt" style="min-width:0">
-                    <div class="t">Video decoder <span class="badge" id="ffmpegBadge">…</span></div>
-                    <div class="d" id="ffmpegInfo" style="overflow-wrap:anywhere">Checking FFmpeg…</div>
-                  </div>
-                  <button class="btn sm" id="ffmpegBtn" style="flex:0 0 auto">Install</button>
-                </div>
-                <div id="ffmpegProg" style="display:none;margin-top:10px">
-                  <div style="height:6px;border-radius:99px;background:var(--line);overflow:hidden">
-                    <div id="ffmpegBar" style="height:100%;width:0%;background:var(--brand);transition:width .15s linear"></div>
-                  </div>
-                  <div class="hint" id="ffmpegMsg" style="margin-top:6px">Starting…</div>
-                </div>
-                <p class="hint" style="margin:10px 0 0">GIF / WebP / APNG play natively. Video (MP4, MKV, AVI, MOV, WebM) needs FFmpeg — install it once above, no admin required.</p>
+          <div class="card">
+            <div class="card-head"><div><h3>Media file</h3><div class="hint">Video, GIF, WebP, APNG, or a still image.</div></div></div>
+            <div class="card-body">
+              <div class="field" style="gap:6px">
+                <button class="btn primary" id="mediaPick"><svg><use href="#i-folder"/></svg>Choose file…</button>
+                <span class="list-s" id="mediaPath" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
               </div>
-            </div>
-            <div class="card">
-              <div class="card-head"><div><h3>Playback</h3><div class="hint">Frames are averaged to one colour and sent live.</div></div></div>
-              <div class="card-body">
-                <div class="field"><span class="field-label">Frames / sec</span><input type="range" id="mediaFps" min="1" max="60"><span class="field-val" id="mediaFpsVal">30</span></div>
-                <div class="field"><span class="field-label">Brightness</span><input type="range" id="mediaBri" min="1" max="100"><span class="field-val" id="mediaBriVal">100%</span></div>
-                <div class="switch-row" style="padding:8px 0">
-                  <div class="txt"><div class="t">Loop</div><div class="d">Restart when the end is reached.</div></div>
-                  <button class="switch" id="mediaLoop" role="switch" aria-checked="true" aria-label="Loop playback"></button>
+              <div class="hr" style="height:1px;background:var(--line);margin:12px 0"></div>
+              <div class="switch-row" style="padding:0;align-items:flex-start;gap:12px">
+                <div class="txt" style="min-width:0">
+                  <div class="t">Video decoder <span class="badge" id="ffmpegBadge">…</span></div>
+                  <div class="d" id="ffmpegInfo" style="overflow-wrap:anywhere">Checking FFmpeg…</div>
                 </div>
-                <div class="field" style="justify-content:flex-end;margin-top:4px">
-                  <button class="btn primary" id="mediaStartFile"><svg><use href="#i-play"/></svg>Play file</button>
-                </div>
+                <button class="btn sm" id="ffmpegBtn" style="flex:0 0 auto">Install</button>
               </div>
+              <div id="ffmpegProg" style="display:none;margin-top:10px">
+                <div style="height:6px;border-radius:99px;background:var(--line);overflow:hidden">
+                  <div id="ffmpegBar" style="height:100%;width:0%;background:var(--brand);transition:width .15s linear"></div>
+                </div>
+                <div class="hint" id="ffmpegMsg" style="margin-top:6px">Starting…</div>
+              </div>
+              <p class="hint" style="margin:10px 0 0">GIF / WebP / APNG play natively. Video (MP4, MKV, AVI, MOV, WebM) needs FFmpeg — install it once above, no admin required.</p>
             </div>
           </div>
         </div>
 
         <div class="tabpanel" data-panel="studio-main:animations">
           <div class="card">
-            <div class="card-head"><div><h3>Generated animations</h3><div class="hint">Pulse and chase use the colour currently selected in Colors.</div></div></div>
-            <div class="card-body"><div class="grid g2" id="mediaGens" style="gap:6px"></div></div>
+            <div class="card-head"><div><h3>Generated animations</h3><div class="hint">14 animations. Pulse, chase, heartbeat and candle tint with the colour selected in Colors.</div></div></div>
+            <div class="card-body"><div class="grid g3" id="mediaGens" style="gap:6px"></div></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+          <div class="card-head"><div><h3>Playback</h3><div class="hint">Speed applies live to animations; FPS and brightness apply live to everything.</div></div></div>
+          <div class="card-body">
+            <div class="grid g3" style="gap:18px">
+              <div class="field"><span class="field-label">Speed</span><input type="range" id="mediaSpeed" min="0.25" max="3" step="0.05"><span class="field-val" id="mediaSpeedVal">1×</span></div>
+              <div class="field"><span class="field-label">Frames / sec</span><input type="range" id="mediaFps" min="1" max="60"><span class="field-val" id="mediaFpsVal">30</span></div>
+              <div class="field"><span class="field-label">Brightness</span><input type="range" id="mediaBri" min="1" max="100"><span class="field-val" id="mediaBriVal">100%</span></div>
+            </div>
+            <div class="field" style="justify-content:space-between;align-items:center;margin-top:10px">
+              <div class="switch-row" style="padding:0;flex:1">
+                <div class="txt"><div class="t">Loop files</div><div class="d">Restart video or GIF when the end is reached.</div></div>
+                <button class="switch" id="mediaLoop" role="switch" aria-checked="true" aria-label="Loop playback"></button>
+              </div>
+              <button class="btn primary" id="mediaStartFile"><svg><use href="#i-play"/></svg>Play file</button>
+            </div>
           </div>
         </div>
 
@@ -1003,7 +1005,7 @@
             <div class="card">
               <div class="card-head"><div><h3>About</h3><div class="hint">Elf Ambilight</div></div></div>
               <div class="card-body">
-                <div class="field"><span class="field-label">Version</span><span class="field-val" id="appVersion" style="text-align:left">v1.4.0</span></div>
+                <div class="field"><span class="field-label">Version</span><span class="field-val" id="appVersion" style="text-align:left">v1.5.0</span></div>
                 <div class="field"><span class="field-label">Engine</span><span class="field-val" style="text-align:left;font-family:var(--sans)">WebView2 · Python</span></div>
                 <div class="field"><span class="field-label">Shortcuts</span><span class="field-val" style="text-align:left;font-family:var(--sans)">Ctrl K · Ctrl S · Alt 1–7</span></div>
               </div>
